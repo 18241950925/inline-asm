@@ -24,14 +24,15 @@ std::string generate_hpu_bconv_asm(
         int cst_id = cst_base_id + i;
 
         asm_code << "        /* Vec " << i << " */\n";
+        asm_code << "        /* c0 <- const_slot[" << cst_id << "], c1 <- mod_out_ctx(" << mod_out << ") */\n";
         asm_code << "        \"pmodsw " << mod_in << " \\n\\t\"\n";
-        asm_code << "        \"sload " << addr_in << ", 1 \\n\\t\"\n";
-        asm_code << "        \"pbcast " << cst_id << ", 2 \\n\\t\"\n";
-        asm_code << "        \"pmul 1, 2, 3 \\n\\t\"\n";
+        asm_code << "        \"sload " << addr_in << ", p0 \\n\\t\"\n";
+        asm_code << "        \"pbcast c0, p1 \\n\\t\"\n";
+        asm_code << "        \"pmul p0, p1, p2 \\n\\t\"\n";
         asm_code << "        \"pmodsw " << mod_out << " \\n\\t\"\n";
-        asm_code << "        \"sload " << addr_acc << ", 4 \\n\\t\"\n";
-        asm_code << "        \"padd 4, 3, 4 \\n\\t\"\n";
-        asm_code << "        \"sstore 4, " << addr_acc << " \\n\\t\"\n";
+        asm_code << "        \"sload " << addr_acc << ", p3 \\n\\t\"\n";
+        asm_code << "        \"padd p3, p2, p3 \\n\\t\"\n";
+        asm_code << "        \"sstore p3, " << addr_acc << " \\n\\t\"\n";
     }
 
     asm_code << "        : \n";

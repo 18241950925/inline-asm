@@ -51,12 +51,12 @@ std::string generate_hpu_ntt_asm(int N, int l, uint16_t base_addr, int mod_id) {
                     uint16_t addr_y = addr_x + vec_stride;
                     
                     asm_code << "        /* Block " << block << ", Offset " << j << " */\n";
-                    asm_code << "        \"sload " << addr_x << ", 1 \\n\\t\"\n";
-                    asm_code << "        \"sload " << addr_y << ", 2 \\n\\t\"\n";
-                    asm_code << "        \"pntt 1, 2, 0 \\n\\t\"\n";
+                    asm_code << "        \"sload " << addr_x << ", p0 \\n\\t\"\n";
+                    asm_code << "        \"sload " << addr_y << ", p1 \\n\\t\"\n";
+                    asm_code << "        \"pntt p0, p1, p2 \\n\\t\"\n";
                     asm_code << "        \"ptwid \\n\\t\"\n";
-                    asm_code << "        \"sstore 1, " << addr_x << " \\n\\t\"\n";
-                    asm_code << "        \"sstore 2, " << addr_y << " \\n\\t\"\n";
+                    asm_code << "        \"sstore p0, " << addr_x << " \\n\\t\"\n";
+                    asm_code << "        \"sstore p1, " << addr_y << " \\n\\t\"\n";
                 }
             }
         } else {
@@ -76,14 +76,14 @@ std::string generate_hpu_ntt_asm(int N, int l, uint16_t base_addr, int mod_id) {
                 uint16_t addr_x = base_addr + i * 2;
                 uint16_t addr_y = base_addr + i * 2 + 1;
                 
-                asm_code << "        \"sload " << addr_x << ", 1 \\n\\t\"\n";
-                asm_code << "        \"sload " << addr_y << ", 2 \\n\\t\"\n";
-                asm_code << "        \"pshuf2 1, 2, 0 \\n\\t\"\n";
-                asm_code << "        \"pntt 1, 2, 0 \\n\\t\"\n";
+                asm_code << "        \"sload " << addr_x << ", p0 \\n\\t\"\n";
+                asm_code << "        \"sload " << addr_y << ", p1 \\n\\t\"\n";
+                asm_code << "        \"pshuf2 p0, p1, p2 \\n\\t\"\n";
+                asm_code << "        \"pntt p0, p1, p2 \\n\\t\"\n";
                 asm_code << "        \"ptwid \\n\\t\"\n";
                 // 如果需要逆向洗牌恢复顺序，可以在这里增加指令
-                asm_code << "        \"sstore 1, " << addr_x << " \\n\\t\"\n";
-                asm_code << "        \"sstore 2, " << addr_y << " \\n\\t\"\n";
+                asm_code << "        \"sstore p0, " << addr_x << " \\n\\t\"\n";
+                asm_code << "        \"sstore p1, " << addr_y << " \\n\\t\"\n";
             }
         }
         twiddle_id++; // 准备下一个 Stage 的 Twiddle
