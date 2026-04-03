@@ -47,8 +47,6 @@ std::string generate_hpu_ntt_asm(int N, int l, uint16_t base_addr_in, uint16_t b
     asm_code << "        \"pmodsw " << mod_id << " \\n\\t\"\n";
     asm_code << "        \"pshcfg " << shf_id_perfect << " \\n\\t\"\n";
     
-    int twiddle_id = 0;
-    
     // Ping-Pong Buffer 地址翻转逻辑
     // 因为完美洗牌会导致数据位置整体移动，通常需要两块大小相等的 SRAM 区域交替写回
     uint16_t addr_src = base_addr_in;
@@ -59,12 +57,13 @@ std::string generate_hpu_ntt_asm(int N, int l, uint16_t base_addr_in, uint16_t b
         asm_code << "        // Stage " << stage << " (Constant Geometry)\n";
         asm_code << "        // ==========================================\n";
         
-        asm_code << "        \"ptwld " << twiddle_id << " \\n\\t\"\n";
+        
         
         // 核心亮点：没有 Stride 分支！恒定读取前一半和后一半的数据
         int half_vecs = num_vecs / 2; 
         
         for (int i = 0; i < half_vecs; i++) {
+
             // 在 CG-NTT 中，取数的逻辑距离总是 N/2
             uint16_t addr_x = addr_src + i;
             uint16_t addr_y = addr_src + i + half_vecs;
@@ -74,12 +73,13 @@ std::string generate_hpu_ntt_asm(int N, int l, uint16_t base_addr_in, uint16_t b
             uint16_t addr_out_y = addr_dst + (i * 2) + 1;
             
             asm_code << "        /* Vector Block " << i << " */\n";
+            asm_code << "        \"ptwld " << i << " \\n\\t\"\n";
             asm_code << "        \"sload " << addr_x << ", p0 \\n\\t\"\n";
             asm_code << "        \"sload " << addr_y << ", p1 \\n\\t\"\n";
             
             // 1. 执行蝶形运算，隐式覆盖 p0, p1
             asm_code << "        \"pntt p0, p1, p0 \\n\\t\"\n";
-            asm_code << "        \"ptwid \\n\\t\"\n";
+            
             
             // 2. 执行统一的完美洗牌，重排数据分布，覆盖 p0, p1
             asm_code << "        \"pshuf2 p0, p1, p0 \\n\\t\"\n";
@@ -91,7 +91,7 @@ std::string generate_hpu_ntt_asm(int N, int l, uint16_t base_addr_in, uint16_t b
         
         // Stage 结束，翻转 Ping-Pong Buffer 的指针
         std::swap(addr_src, addr_dst);
-        twiddle_id++;
+        asm_code << "        \"ptwid \\n\\t\"\n";
     }
     
     // 如果 logN 是奇数，最终结果可能在 addr_dst 中，需要根据情况处理搬运
