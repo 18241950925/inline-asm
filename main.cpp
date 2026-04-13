@@ -9,68 +9,69 @@ namespace {
 
 struct NttConfig {
 	int N;
-	int l;
-	uint16_t base_addr_in;
-	uint16_t base_addr_out;
-	int mod_id;
+	int obj_poly_a;
+	int obj_poly_b;
+	int mod_ctx_obj;
+	int shf_cfg_obj;
 };
 
 struct MmConfig {
-	int N;
-	int l;
-	uint16_t base_addr_a;
-	uint16_t base_addr_b;
-	uint16_t base_addr_c;
-	int mod_id;
+	int obj_a;
+	int obj_b;
+	int obj_c;
+	int mod_ctx_obj;
 };
 
 struct BconvConfig {
-	int N;
-	int l;
 	int num_q;
 	int num_p;
-	uint16_t base_addr_in;
-	uint16_t base_addr_tmp;
-	uint16_t base_addr_out;
+	int obj_q_base;
+	int obj_tmp_base;
+	int obj_p_base;
+	int obj_qhat_inv_base;
+	int obj_qhat_modp_base;
+	int mod_ctx_q_base;
+	int mod_ctx_p_base;
 };
 
-constexpr NttConfig kNttCfg{64, 16, 0x0000, 0x0080, 0};
-constexpr MmConfig kMmCfg{64, 16, 0x0100, 0x0200, 0x0300, 1};
-constexpr BconvConfig kBconvCfg{64, 16, 2, 3, 0x0400, 0x0500, 0x0600};
+constexpr NttConfig kNttCfg{64, 0, 1, 2, 3};
+constexpr MmConfig kMmCfg{0, 1, 2, 3};
+// 为了演示 3-bit 槽位约束，示例采用 num_q = num_p = 1
+constexpr BconvConfig kBconvCfg{1, 1, 0, 1, 2, 3, 4, 5, 6};
 
 void test_ntt_codegen()
 {
 	std::string ntt = generate_hpu_ntt_asm(
 		kNttCfg.N,
-		kNttCfg.l,
-		kNttCfg.base_addr_in,
-		kNttCfg.base_addr_out,
-		kNttCfg.mod_id);
+		kNttCfg.obj_poly_a,
+		kNttCfg.obj_poly_b,
+		kNttCfg.mod_ctx_obj,
+		kNttCfg.shf_cfg_obj);
 	std::cout << "===== NTT ASM =====\n" << ntt << "\n";
 }
 
 void test_mm_codegen()
 {
 	std::string mm = generate_hpu_mm_asm(
-		kMmCfg.N,
-		kMmCfg.l,
-		kMmCfg.base_addr_a,
-		kMmCfg.base_addr_b,
-		kMmCfg.base_addr_c,
-		kMmCfg.mod_id);
+		kMmCfg.obj_a,
+		kMmCfg.obj_b,
+		kMmCfg.obj_c,
+		kMmCfg.mod_ctx_obj);
 	std::cout << "===== MM ASM =====\n" << mm << "\n";
 }
 
 void test_bconv_codegen()
 {
 	std::string bconv = generate_hpu_bconv_asm(
-		kBconvCfg.N,
-		kBconvCfg.l,
 		kBconvCfg.num_q,
 		kBconvCfg.num_p,
-		kBconvCfg.base_addr_in,
-		kBconvCfg.base_addr_tmp,
-		kBconvCfg.base_addr_out);
+		kBconvCfg.obj_q_base,
+		kBconvCfg.obj_tmp_base,
+		kBconvCfg.obj_p_base,
+		kBconvCfg.obj_qhat_inv_base,
+		kBconvCfg.obj_qhat_modp_base,
+		kBconvCfg.mod_ctx_q_base,
+		kBconvCfg.mod_ctx_p_base);
 	std::cout << "===== BCONV ASM =====\n" << bconv << "\n";
 }
 

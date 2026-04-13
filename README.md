@@ -1,24 +1,29 @@
 ## 1. 项目结构：
 
 - `main.cpp`：给了 3 组示例参数，调用 3 个生成器并打印汇编文本
-- `util/ntt.cpp`：CG-NTT（Constant Geometry NTT）汇编生成
-- `util/mm.cpp`：逐向量块乘法（`pmul`）汇编生成
-- `util/bconv.cpp`：Basis Conversion 两阶段（预处理 + 跨基累加）汇编生成
+- `util/hpu_asm.hpp`：新版 HPU 汇编指令生成的公共接口文件，符合最新的 6 字段格式。
+- `util/ntt.cpp`：按 stage 推进的 NTT 汇编生成（对象槽位语义）
+- `util/mm.cpp`：对象槽位上的 `pmul` 汇编生成
+- `util/bconv.cpp`：对象槽位上的 Basis Conversion 两阶段汇编生成
 
-对应接口：
+对应接口（已根据最新 HPU 架构移除切分参数 `l` 和部分不需要的外层控制参数）：
 
 - `generate_hpu_ntt_asm(...)`
 - `generate_hpu_mm_asm(...)`
 - `generate_hpu_bconv_asm(...)`
+
+并且新增了由生成器生成的详细手册：`HPU_INSTRUCTION_MANUAL.md` 供负责后端的同事将其转译成机器码。
 
 ---
 
 ## 2. 一键构建与运行
 
 ```bash
-cmake -S . -B build
-cmake --build build -j
-./build/inline_asm_codegen
+mkdir -p build
+cd build
+cmake ..
+cmake --build . -j
+./inline_asm_codegen
 ```
 
 运行后会打印三段文本：
@@ -35,27 +40,27 @@ cmake --build build -j
 
 ### NTT
 - `N = 64`
-- `l = 16`
-- `base_addr_in = 0x0000`
-- `base_addr_out = 0x0080`
-- `mod_id = 0`
+- `obj_poly_a = 0`
+- `obj_poly_b = 1`
+- `mod_ctx_obj = 2`
+- `shf_cfg_obj = 3`
 
 ### MM
-- `N = 64`
-- `l = 16`
-- `base_addr_a = 0x0100`
-- `base_addr_b = 0x0200`
-- `base_addr_c = 0x0300`
-- `mod_id = 1`
+- `obj_a = 0`
+- `obj_b = 1`
+- `obj_c = 2`
+- `mod_ctx_obj = 3`
 
 ### BCONV
-- `N = 64`
-- `l = 16`
-- `num_q = 2`
-- `num_p = 3`
-- `base_addr_in = 0x0400`
-- `base_addr_tmp = 0x0500`
-- `base_addr_out = 0x0600`
+- `num_q = 1`
+- `num_p = 1`
+- `obj_q_base = 0`
+- `obj_tmp_base = 1`
+- `obj_p_base = 2`
+- `obj_qhat_inv_base = 3`
+- `obj_qhat_modp_base = 4`
+- `mod_ctx_q_base = 5`
+- `mod_ctx_p_base = 6`
 
 ---
 
@@ -63,61 +68,47 @@ cmake --build build -j
 
 ## 4.1 NTT（`util/ntt.cpp`）
 
-- 使用 CG-NTT 思路，循环 `stage = 1..log2(N)`
-- 每个 stage：
-  - `ptwld i`
-  - `sload x -> p0`，`sload y -> p1`
-  - `pntt p0, p1, p0`
-  - `pshuf2 p0, p1, p0`
-  - `sstore p0/p1`
-- stage 结束发 `ptwid`
-- 输入/输出缓冲区采用 **Ping-Pong** 翻转（`base_addr_in` 与 `base_addr_out` 交替读写）
-
-> 备注：代码里 `pshcfg` 固定用了 `shf_id_perfect = 0x00`，如果硬件模板 ID 不同，请改这里。
+- 对齐 HPU 文档，改为 **对象槽位 + stage 指令粒度**，并且去除了参数 `l` 统一执行。
+- 初始化阶段：
+  - `pmodld p<mod_ctx_obj>, 0, 0`
+  - `pshcfg p<shf_cfg_obj>, 0, 0`
+- 主循环执行 `stage = 0..log2(N)-1`：
+  - `pntt pdst, psrc, stage, 0, 0`
+  - 通过两个对象槽位做 ping-pong（`obj_poly_a`/`obj_poly_b`）
+- 可选追加 `psync 0, 0` 作为阶段同步屏障
 
 ## 4.2 MM（`util/mm.cpp`）
 
-每个向量块固定序列：
-
-1. `sload A -> p0`
-2. `sload B -> p1`
-3. `pmul p0, p1, p2`
-4. `sstore p2 -> C`
-
-入口只做一次 `pmodsw mod_id`。
+- 彻底转为底层流式化对象处理，无需传入 `N` 和 `l` 按 `chunk` 模拟迭代。
+- 入口先装载模上下文：`pmodld p<mod_ctx_obj>, 0, 0`
+- 直接对于整个多项式对象生成 `pmul p<obj_a>, p<obj_b>, p<obj_c>`
+- 可选追加 `psync 0, 0`
 
 ## 4.3 BCONV（`util/bconv.cpp`）
 
-分两阶段：
+已移除内部基于 `chunk` 的计算过程，分两阶段执行：
 
 - **Stage 1（Q 基预处理）**
-  - 对每个 `q_j`：`pmodsw slot_q`
-  - `x_j = a_j * q_hat_inv (mod q_j)`
-  - 结果写到 `base_addr_tmp`
+  - 对每个 `q_j`：`pmodld p<mod_ctx_q_base + j>, 0, 0`
+  - `x_j = a_j * q_hat_inv_j (mod q_j)`
+  - 生成 `pmul p<obj_q_j>, p<obj_qhat_inv_j>, p<obj_tmp_j>`
 
 - **Stage 2（P 基累加）**
-  - 对每个 `p_i`：`pmodsw slot_p`
+  - 对每个 `p_i`：`pmodld p<mod_ctx_p_base + i>, 0, 0`
   - 累加 `x_j * q_hat_j(mod p_i)`
-  - 第一次用 `pmul`，后续用 `pmac` 累加到 `p2`
-  - 最终写到 `base_addr_out`
-
-当前代码里的槽位/常量寄存器是原型约定：
-
-- 模数槽位：通过 `j % 4`、`(num_q + i) % 4` 分配
-- `q_hat_inv` 默认 `c0`
-- `q_hat_j(mod p_i)` 默认 `c1`
+  - 第一次用 `pmul` 初始化累加，后续用 `pmac` 累加到 `p<obj_p_i>`
+- 可选追加 `psync 0, 0`
 
 
 ---
 
-## 5. 地址与容量注意事项
+## 5. 对象槽位与参数注意事项
 
 本项目不会做越界检查，调用方需要保证：
 
-- `N % l == 0`
-- 各缓冲区容量足够（按 `num_vecs = N / l` 计算）
-- 各地址区间不重叠（尤其是 NTT 的双缓冲、BCONV 的 in/tmp/out）
-- `mod_id`、`pshcfg`、常量寄存器 ID 在硬件侧已正确预置
+- `N` 为 2 的幂（NTT需要传入以确定 Stage 层数）
+- 各对象槽位 ID 与硬件对象管理保持一致
+- `pmodld`/`pshcfg` 对应对象槽位已通过 `dload` 准备好模上下文与 shuffle 配置
+- 需要阶段收敛时使用 `psync`
 
 ---
-

@@ -1,33 +1,26 @@
 #include "mm.hpp"
+#include "hpu_asm.hpp"
 
 #include <sstream>
 #include <string>
 
 std::string generate_hpu_mm_asm(
-    int N,
-    int l,
-    uint16_t base_addr_a,
-    uint16_t base_addr_b,
-    uint16_t base_addr_c,
-    int mod_id)
+    int obj_a,
+    int obj_b,
+    int obj_c,
+    int mod_ctx_obj,
+    bool append_psync)
 {
     std::ostringstream asm_code;
-    int num_vecs = N / l;
+    asm_code << "void hpu_mm_complete(void) {\n";
 
-    asm_code << "void hpu_mm_complete_N" << N << "_l" << l << "(void) {\n";
     asm_code << "    __asm__ volatile(\n";
-    asm_code << "        \"pmodsw " << mod_id << " \\n\\t\"\n";
+    asm_code << hpu::pmodld(mod_ctx_obj);
 
-    for (int i = 0; i < num_vecs; ++i) {
-        uint16_t addr_a = static_cast<uint16_t>(base_addr_a + i);
-        uint16_t addr_b = static_cast<uint16_t>(base_addr_b + i);
-        uint16_t addr_c = static_cast<uint16_t>(base_addr_c + i);
+    asm_code << hpu::pmul(obj_a, obj_b, obj_c);
 
-        asm_code << "        /* Vec " << i << " */\n";
-        asm_code << "        \"sload " << addr_a << ", p0 \\n\\t\"\n";
-        asm_code << "        \"sload " << addr_b << ", p1 \\n\\t\"\n";
-        asm_code << "        \"pmul p0, p1, p2 \\n\\t\"\n";
-        asm_code << "        \"sstore p2, " << addr_c << " \\n\\t\"\n";
+    if (append_psync) {
+        asm_code << hpu::psync(0);
     }
 
     asm_code << "        : \n";

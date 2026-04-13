@@ -3,5 +3,10 @@
 #include <stdint.h>
 #include <string>
 
-std::string generate_hpu_ntt_asm(int N, int l, uint16_t base_addr_in, uint16_t base_addr_out, int mod_id);
-
+std::string generate_hpu_ntt_asm(
+        int N,
+        int obj_poly_a,
+        int obj_poly_b,
+        int mod_ctx_obj,
+        int shf_cfg_obj,
+        bool append_psync = true);
