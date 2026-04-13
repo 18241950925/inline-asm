@@ -39,6 +39,16 @@ constexpr MmConfig kMmCfg{0, 1, 2, 3};
 // 为了演示 3-bit 槽位约束，示例采用 num_q = num_p = 1
 constexpr BconvConfig kBconvCfg{1, 1, 0, 1, 2, 3, 4, 5, 6};
 
+void test_intt_codegen() {
+	std::string intt = generate_hpu_intt_asm(
+		kNttCfg.N,
+		kNttCfg.obj_poly_a,
+		kNttCfg.obj_poly_b,
+		kNttCfg.mod_ctx_obj,
+		kNttCfg.shf_cfg_obj);
+	std::cout << "===== INTT ASM =====\n" << intt << "\n";
+}
+
 void test_ntt_codegen()
 {
 	std::string ntt = generate_hpu_ntt_asm(
@@ -80,6 +90,7 @@ void test_bconv_codegen()
 int main()
 {
 	test_ntt_codegen();
+	test_intt_codegen();
 	test_mm_codegen();
 	test_bconv_codegen();
 	return 0;

@@ -39,7 +39,7 @@ std::string generate_hpu_bconv_asm(
 
         asm_code << "        /* Context: q_" << j << " */\n";
         asm_code << hpu::pmodld(obj_mod_ctx_q);
-        asm_code << hpu::pmul(obj_q, obj_inv, obj_tmp);
+        asm_code << hpu::pmul(obj_tmp, obj_q, obj_inv);
     }
 
     // ==========================================
@@ -59,9 +59,9 @@ std::string generate_hpu_bconv_asm(
             const int obj_coeff = obj_qhat_modp_base + (i * num_q) + j;
 
             if (j == 0) {
-                asm_code << hpu::pmul(obj_tmp, obj_coeff, obj_acc);
+                asm_code << hpu::pmul(obj_acc, obj_tmp, obj_coeff);
             } else {
-                asm_code << hpu::pmac(obj_tmp, obj_coeff, obj_acc);
+                asm_code << hpu::pmac(obj_acc, obj_tmp, obj_coeff);
             }
         }
     }

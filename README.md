@@ -12,7 +12,7 @@
 - `generate_hpu_mm_asm(...)`
 - `generate_hpu_bconv_asm(...)`
 
-并且新增了由生成器生成的详细手册：`HPU_INSTRUCTION_MANUAL.md` 供负责后端的同事将其转译成机器码。
+并且新增了由生成器生成的详细手册：`HPU_INSTRUCTION_MANUAL.md` 供负责后端的同学将其转译成机器码。
 
 ---
 

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <stdint.h>
 #include <string>
 
 std::string generate_hpu_bconv_asm(
@@ -13,4 +12,4 @@ std::string generate_hpu_bconv_asm(
     int obj_qhat_modp_base,
     int mod_ctx_q_base,
     int mod_ctx_p_base,
-    bool append_psync = true);
+    bool append_psync = false);
