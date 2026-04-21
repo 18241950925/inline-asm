@@ -8,13 +8,17 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_executable(inline_asm_codegen
-	main.cpp
-	util/ntt.cpp
-	util/mm.cpp
-	util/bconv.cpp
+        src/main.cpp
+        src/util/ntt.cpp
+        src/util/mm.cpp
+        src/util/bconv.cpp
+        src/operator/modup.cpp
+        src/operator/moddown.cpp
+        src/operator/pmult.cpp
+        src/operator/cmult.cpp
 )
 
 target_include_directories(inline_asm_codegen
-	PRIVATE
-	${CMAKE_CURRENT_SOURCE_DIR}
+        PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
 )

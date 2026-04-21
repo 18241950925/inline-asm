@@ -1,5 +1,5 @@
-#include "ntt.hpp"
-#include "hpu_asm.hpp"
+#include "util/ntt.hpp"
+#include "util/hpu_asm.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -15,7 +15,7 @@ bool is_power_of_two(int x)
 
 } // namespace
 
-std::string generate_hpu_ntt_asm(
+std::string generate_hpu_ntt_body_asm(
     int N,
     int obj_poly_a,
     int obj_poly_b,
@@ -25,17 +25,12 @@ std::string generate_hpu_ntt_asm(
 {
     std::ostringstream asm_code;
 
-    asm_code << "void hpu_ntt_N" << N << "(void) {\n";
-
     if (!is_power_of_two(N)) {
-        asm_code << "    // Invalid config: require power-of-two N\n";
-        asm_code << "}\n";
+        asm_code << "        // Invalid config: require power-of-two N\n";
         return asm_code.str();
     }
 
     const int logN = static_cast<int>(std::log2(static_cast<double>(N)));
-
-    asm_code << "    __asm__ volatile(\n";
 
     // 新版 ISA：通过对象槽位装载模上下文与 Shuffle 配置
     asm_code << hpu::pmodld(mod_ctx_obj);
@@ -58,16 +53,10 @@ std::string generate_hpu_ntt_asm(
     }
 
     asm_code << "\n        // Final result object slot: " << hpu::pobj(src_obj) << "\n";
-    asm_code << "\n        // 结束\n";
-    asm_code << "        : \n";
-    asm_code << "        : \n";
-    asm_code << "        : \"memory\"\n";
-    asm_code << "    );\n";
-    asm_code << "}\n";
-    
     return asm_code.str();
 }
-std::string generate_hpu_intt_asm(
+
+std::string generate_hpu_intt_body_asm(
     int N,
     int obj_poly_a,
     int obj_poly_b,
@@ -77,17 +66,12 @@ std::string generate_hpu_intt_asm(
 {
     std::ostringstream asm_code;
 
-    asm_code << "void hpu_intt_N" << N << "(void) {\n";
-
     if (!is_power_of_two(N)) {
-        asm_code << "    // Invalid config: require power-of-two N\n";
-        asm_code << "}\n";
+        asm_code << "        // Invalid config: require power-of-two N\n";
         return asm_code.str();
     }
 
     const int logN = static_cast<int>(std::log2(static_cast<double>(N)));
-
-    asm_code << "    __asm__ volatile(\n";
 
     // 新版 ISA：通过对象槽位装载模上下文与 Shuffle 配置
     asm_code << hpu::pmodld(mod_ctx_obj);
@@ -110,6 +94,71 @@ std::string generate_hpu_intt_asm(
     }
 
     asm_code << "\n        // Final result object slot: " << hpu::pobj(src_obj) << "\n";
+    return asm_code.str();
+}
+
+std::string generate_hpu_ntt_asm(
+    int N,
+    int obj_poly_a,
+    int obj_poly_b,
+    int mod_ctx_obj,
+    int shf_cfg_obj,
+    bool append_psync)
+{
+    std::ostringstream asm_code;
+
+    asm_code << "void hpu_ntt_N" << N << "(void) {\n";
+
+    if (!is_power_of_two(N)) {
+        asm_code << "    // Invalid config: require power-of-two N\n";
+        asm_code << "}\n";
+        return asm_code.str();
+    }
+
+    asm_code << "    __asm__ volatile(\n";
+    asm_code << generate_hpu_ntt_body_asm(
+        N,
+        obj_poly_a,
+        obj_poly_b,
+        mod_ctx_obj,
+        shf_cfg_obj,
+        append_psync);
+    asm_code << "\n        // 结束\n";
+    asm_code << "        : \n";
+    asm_code << "        : \n";
+    asm_code << "        : \"memory\"\n";
+    asm_code << "    );\n";
+    asm_code << "}\n";
+    
+    return asm_code.str();
+}
+
+std::string generate_hpu_intt_asm(
+    int N,
+    int obj_poly_a,
+    int obj_poly_b,
+    int mod_ctx_obj,
+    int shf_cfg_obj,
+    bool append_psync)
+{
+    std::ostringstream asm_code;
+
+    asm_code << "void hpu_intt_N" << N << "(void) {\n";
+
+    if (!is_power_of_two(N)) {
+        asm_code << "    // Invalid config: require power-of-two N\n";
+        asm_code << "}\n";
+        return asm_code.str();
+    }
+
+    asm_code << "    __asm__ volatile(\n";
+    asm_code << generate_hpu_intt_body_asm(
+        N,
+        obj_poly_a,
+        obj_poly_b,
+        mod_ctx_obj,
+        shf_cfg_obj,
+        append_psync);
     asm_code << "\n        // 结束\n";
     asm_code << "        : \n";
     asm_code << "        : \n";

@@ -2,6 +2,11 @@
 
 #include <string>
 
+std::string generate_hpu_mm_body_asm(
+    int obj_a,
+    int obj_b,
+    int obj_c);
+
 std::string generate_hpu_mm_asm(
     int obj_a,
     int obj_b,

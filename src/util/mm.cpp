@@ -1,8 +1,18 @@
-#include "mm.hpp"
-#include "hpu_asm.hpp"
+#include "util/mm.hpp"
+#include "util/hpu_asm.hpp"
 
 #include <sstream>
 #include <string>
+
+std::string generate_hpu_mm_body_asm(
+    int obj_a,
+    int obj_b,
+    int obj_c)
+{
+    std::ostringstream asm_code;
+    asm_code << hpu::pmul(obj_a, obj_b, obj_c);
+    return asm_code.str();
+}
 
 std::string generate_hpu_mm_asm(
     int obj_a,
@@ -16,8 +26,7 @@ std::string generate_hpu_mm_asm(
 
     asm_code << "    __asm__ volatile(\n";
     asm_code << hpu::pmodld(mod_ctx_obj);
-
-    asm_code << hpu::pmul(obj_a, obj_b, obj_c);
+    asm_code << generate_hpu_mm_body_asm(obj_a, obj_b, obj_c);
 
     if (append_psync) {
         asm_code << hpu::psync(0);
