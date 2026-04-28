@@ -116,14 +116,7 @@ void test_bconv_codegen()
 {
 	std::string bconv = generate_hpu_bconv_asm(
 		kBconvCfg.num_q,
-		kBconvCfg.num_p,
-		kBconvCfg.obj_q_base,
-		kBconvCfg.obj_tmp_base,
-		kBconvCfg.obj_p_base,
-		kBconvCfg.obj_qhat_inv_base,
-		kBconvCfg.obj_qhat_modp_base,
-		kBconvCfg.mod_ctx_q_base,
-		kBconvCfg.mod_ctx_p_base);
+		kBconvCfg.num_p);
 	std::cout << "===== BCONV ASM =====\n" << bconv << "\n";
 }
 
@@ -131,12 +124,6 @@ void test_pmult_codegen()
 {
 	std::string pmult = generate_hpu_pmult_asm(
 		kPmultCfg.num_q,
-		kPmultCfg.ct0_base,
-		kPmultCfg.ct1_base,
-		kPmultCfg.pt_base,
-		kPmultCfg.out0_base,
-		kPmultCfg.out1_base,
-		kPmultCfg.mod_ctx_q_base,
 		true);
 	std::cout << "===== PMULT ASM =====\n" << pmult << "\n";
 }
@@ -145,14 +132,6 @@ void test_cmult_codegen()
 {
 	std::string cmult = generate_hpu_cmult_asm(
 		kCmultCfg.num_q,
-		kCmultCfg.a0_base,
-		kCmultCfg.a1_base,
-		kCmultCfg.b0_base,
-		kCmultCfg.b1_base,
-		kCmultCfg.out0_base,
-		kCmultCfg.out1_base,
-		kCmultCfg.out2_base,
-		kCmultCfg.mod_ctx_q_base,
 		true);
 	std::cout << "===== CMULT ASM =====\n" << cmult << "\n";
 }
@@ -162,13 +141,6 @@ void test_modup_codegen()
 	std::string modup = generate_hpu_modup_asm(
 		kBconvCfg.num_q,
 		kBconvCfg.num_p,
-		kBconvCfg.obj_q_base,
-		kBconvCfg.obj_tmp_base,
-		kBconvCfg.obj_p_base,
-		kBconvCfg.obj_qhat_inv_base,
-		kBconvCfg.obj_qhat_modp_base,
-		kBconvCfg.mod_ctx_q_base,
-		kBconvCfg.mod_ctx_p_base,
 		true);
 	std::cout << "===== MODUP ASM =====\n" << modup << "\n";
 }
@@ -178,14 +150,6 @@ void test_moddown_codegen()
 	std::string moddown = generate_hpu_moddown_asm(
 		kModdownCfg.num_q,
 		kModdownCfg.num_p,
-		kModdownCfg.q_base,
-		kModdownCfg.p_base,
-		kModdownCfg.tmp_base,
-		kModdownCfg.qcorr_base,
-		kModdownCfg.phat_inv_base,
-		kModdownCfg.phat_modq_base,
-		kModdownCfg.mod_ctx_p_base,
-		kModdownCfg.mod_ctx_q_base,
 		true);
 	std::cout << "===== MODDOWN ASM =====\n" << moddown << "\n";
 }

@@ -12,9 +12,17 @@ inline std::string pobj(int id) {
 // ==========================================
 // 外部访存类指令 (custom1)
 // ==========================================
-inline std::string dload(const std::string& rs1, const std::string& rs2, int pdst, int load_type) {
+
+enum class DataType {
+    seg = 0,
+    poly = 1,
+    mod_ctx = 2,
+    shuffle_cfg = 3
+};
+
+inline std::string dload(const std::string& rs1, const std::string& rs2, int pdst, DataType load_type) {
     std::ostringstream ss;
-    ss << "        \"dload " << rs1 << ", " << rs2 << ", " << pobj(pdst) << ", " << load_type << " \\n\\t\"\n";
+    ss << "        \"dload " << rs1 << ", " << rs2 << ", " << pobj(pdst) << ", " << static_cast<int>(load_type) << " \\n\\t\"\n";
     return ss.str();
 }
 
@@ -97,11 +105,6 @@ inline std::string pshuf(int pdst, int psrc, int idx0, int idx1, int mode = 0) {
     return ss.str();
 }
 
-inline std::string psample(int pdst, int psrc, int idx0, int idx1, int mode = 0) {
-    std::ostringstream ss;
-    ss << "        \"psample " << pobj(pdst) << ", " << pobj(psrc) << ", " << idx0 << ", " << idx1 << ", " << mode << " \\n\\t\"\n";
-    return ss.str();
-}
 
 // --- CFG 格式：配置 / 控制类 ---
 inline std::string pshcfg(int idx0, int idx1 = 0, int cfg = 0) {

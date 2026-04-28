@@ -25,12 +25,6 @@ int final_slot_after_stages(int N, int obj_a, int obj_b)
 
 std::string generate_hpu_pmult_asm(
     int num_q,
-    int obj_ct0_base,
-    int obj_ct1_base,
-    int obj_pt_base,
-    int obj_out0_base,
-    int obj_out1_base,
-    int mod_ctx_q_base,
     bool append_psync)
 {
     std::ostringstream asm_code;
@@ -45,18 +39,24 @@ std::string generate_hpu_pmult_asm(
     asm_code << "    __asm__ volatile(\n";
     asm_code << "        /* PMULT: (ct0, ct1) * pt over RNS basis Q */\n";
 
-    for (int i = 0; i < num_q; ++i) {
-        const int ctx = mod_ctx_q_base + i;
-        const int ct0 = obj_ct0_base + i;
-        const int ct1 = obj_ct1_base + i;
-        const int pt = obj_pt_base + i;
-        const int out0 = obj_out0_base + i;
-        const int out1 = obj_out1_base + i;
+    const int POBJ_MOD_CTX = 4;
+    const int POBJ_CT = 0;
+    const int POBJ_PT = 1;
+    const int POBJ_OUT = 2;
 
+    for (int i = 0; i < num_q; ++i) {
         asm_code << "        /* q_" << i << " */\n";
-        asm_code << hpu::pmodld(ctx);
-        asm_code << generate_hpu_mm_body_asm(out0, ct0, pt);
-        asm_code << generate_hpu_mm_body_asm(out1, ct1, pt);
+        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+        asm_code << hpu::pmodld(POBJ_MOD_CTX);
+
+        asm_code << hpu::dload("x0", "x0", POBJ_CT, hpu::DataType::poly);
+        asm_code << hpu::dload("x0", "x0", POBJ_PT, hpu::DataType::poly);
+        asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_CT, POBJ_PT);
+        asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 0);
+
+        asm_code << hpu::dload("x0", "x0", POBJ_CT, hpu::DataType::poly);
+        asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_CT, POBJ_PT);
+        asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 0);
     }
 
     if (append_psync) {
@@ -75,16 +75,6 @@ std::string generate_hpu_pmult_asm(
 std::string generate_hpu_pmult_ntt_asm(
     int N,
     int num_q,
-    int obj_ct0_base,
-    int obj_ct1_base,
-    int obj_pt_base,
-    int obj_ct0_buf_base,
-    int obj_ct1_buf_base,
-    int obj_pt_buf_base,
-    int obj_out0_base,
-    int obj_out1_base,
-    int mod_ctx_q_base,
-    int shf_cfg_q_base,
     bool append_psync)
 {
     std::ostringstream asm_code;
@@ -99,31 +89,39 @@ std::string generate_hpu_pmult_ntt_asm(
     asm_code << "    __asm__ volatile(\n";
     asm_code << "        /* PMULT+NTT: NTT(ct0,ct1,pt) then point-wise multiply */\n";
 
+    const int POBJ_MOD_CTX = 4;
+    const int POBJ_SHF = 0; // Dummy
+    const int POBJ_TMP_A = 0;
+    const int POBJ_TMP_B = 1;
+    const int POBJ_PT_NTT = 2;
+    const int POBJ_CT_NTT = 0; // Reusing slot A for CT result
+
     for (int i = 0; i < num_q; ++i) {
-        const int ctx = mod_ctx_q_base + i;
-        const int shf = shf_cfg_q_base + i;
-
-        const int ct0 = obj_ct0_base + i;
-        const int ct1 = obj_ct1_base + i;
-        const int pt = obj_pt_base + i;
-        const int ct0_buf = obj_ct0_buf_base + i;
-        const int ct1_buf = obj_ct1_buf_base + i;
-        const int pt_buf = obj_pt_buf_base + i;
-
-        const int ct0_ntt = final_slot_after_stages(N, ct0, ct0_buf);
-        const int ct1_ntt = final_slot_after_stages(N, ct1, ct1_buf);
-        const int pt_ntt = final_slot_after_stages(N, pt, pt_buf);
-
-        const int out0 = obj_out0_base + i;
-        const int out1 = obj_out1_base + i;
-
         asm_code << "        /* q_" << i << " */\n";
-        asm_code << generate_hpu_ntt_body_asm(N, ct0, ct0_buf, ctx, shf, false);
-        asm_code << generate_hpu_ntt_body_asm(N, ct1, ct1_buf, ctx, shf, false);
-        asm_code << generate_hpu_ntt_body_asm(N, pt, pt_buf, ctx, shf, false);
-        asm_code << hpu::pmodld(ctx);
-        asm_code << generate_hpu_mm_body_asm(out0, ct0_ntt, pt_ntt);
-        asm_code << generate_hpu_mm_body_asm(out1, ct1_ntt, pt_ntt);
+        // Pre-NTT PT
+        asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
+        asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_TMP_B, POBJ_MOD_CTX, POBJ_SHF, false);
+        int pt_ntt_slot = final_slot_after_stages(N, POBJ_TMP_A, POBJ_TMP_B);
+        // Move to POBJ_PT_NTT if it's not already there
+        if (pt_ntt_slot != POBJ_PT_NTT) {
+            // we will just dstore and reload or use alias, we can dstore then reload to POBJ_PT_NTT
+            asm_code << hpu::dstore("x0", "x0", pt_ntt_slot, 0);
+            asm_code << hpu::dload("x0", "x0", POBJ_PT_NTT, hpu::DataType::poly);
+        }
+
+        // Pre-NTT CT0
+        asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
+        asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_TMP_B, POBJ_MOD_CTX, POBJ_SHF, false);
+        int ct0_ntt_slot = final_slot_after_stages(N, POBJ_TMP_A, POBJ_TMP_B);
+        asm_code << generate_hpu_mm_body_asm(POBJ_TMP_A, ct0_ntt_slot, POBJ_PT_NTT);
+        asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
+
+        // Pre-NTT CT1
+        asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
+        asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_TMP_B, POBJ_MOD_CTX, POBJ_SHF, false);
+        int ct1_ntt_slot = final_slot_after_stages(N, POBJ_TMP_A, POBJ_TMP_B);
+        asm_code << generate_hpu_mm_body_asm(POBJ_TMP_A, ct1_ntt_slot, POBJ_PT_NTT);
+        asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
     }
 
     if (append_psync) {

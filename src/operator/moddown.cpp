@@ -9,41 +9,35 @@
 std::string generate_hpu_moddown_body_asm(
     int num_q,
     int num_p,
-    int obj_q_base,
-    int obj_p_base,
-    int obj_tmp_base,
-    int obj_qcorr_base,
-    int obj_phat_inv_base,
-    int obj_phat_modq_base,
-    int mod_ctx_p_base,
-    int mod_ctx_q_base,
     bool append_psync)
 {
     std::ostringstream asm_code;
-    asm_code << "        /* MODDOWN stage-1: BConv P -> Q (correction term) */\n";
 
+    // 复用 HPU 硬件槽位
+    const int POBJ_MOD_CTX = 4;
+    const int POBJ_Q = 0;
+    const int POBJ_CORR = 1;
+
+    asm_code << "        /* MODDOWN stage-1: BConv P -> Q (correction term) */\n";
     // 复用 bconv 主体：输入基改为 P，目标基改为 Q。
     asm_code << generate_hpu_bconv_body_asm(
         num_p,
         num_q,
-        obj_p_base,
-        obj_tmp_base,
-        obj_qcorr_base,
-        obj_phat_inv_base,
-        obj_phat_modq_base,
-        mod_ctx_p_base,
-        mod_ctx_q_base,
         false);
 
-    asm_code << "        /* MODDOWN stage-2: q <- q - correction (mod q_i) */\n";
-    for (int i = 0; i < num_q; ++i) {
-        const int ctx_q = mod_ctx_q_base + i;
-        const int q = obj_q_base + i;
-        const int corr = obj_qcorr_base + i;
+    asm_code << "        // dload all mod contexts (placeholder)\\n";
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
 
-        asm_code << "        /* q_" << i << " */\n";
-        asm_code << hpu::pmodld(ctx_q);
-        asm_code << hpu::psub(q, q, corr);
+    asm_code << "        /* MODDOWN stage-2: q <- q - correction (mod q_i) */\\n";
+    for (int i = 0; i < num_q; ++i) {
+        asm_code << "        /* q_" << i << " */\\n";
+        asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
+
+        asm_code << hpu::dload("x0", "x0", POBJ_Q, hpu::DataType::poly);
+        asm_code << hpu::dload("x0", "x0", POBJ_CORR, hpu::DataType::poly);
+        
+        asm_code << hpu::psub(POBJ_Q, POBJ_Q, POBJ_CORR);
+        asm_code << hpu::dstore("x0", "x0", POBJ_Q, 0);
     }
 
     if (append_psync) {
@@ -56,14 +50,6 @@ std::string generate_hpu_moddown_body_asm(
 std::string generate_hpu_moddown_asm(
     int num_q,
     int num_p,
-    int obj_q_base,
-    int obj_p_base,
-    int obj_tmp_base,
-    int obj_qcorr_base,
-    int obj_phat_inv_base,
-    int obj_phat_modq_base,
-    int mod_ctx_p_base,
-    int mod_ctx_q_base,
     bool append_psync)
 {
     std::ostringstream asm_code;
@@ -79,14 +65,6 @@ std::string generate_hpu_moddown_asm(
     asm_code << generate_hpu_moddown_body_asm(
         num_q,
         num_p,
-        obj_q_base,
-        obj_p_base,
-        obj_tmp_base,
-        obj_qcorr_base,
-        obj_phat_inv_base,
-        obj_phat_modq_base,
-        mod_ctx_p_base,
-        mod_ctx_q_base,
         append_psync);
 
     asm_code << "        : \n";

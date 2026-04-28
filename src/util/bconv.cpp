@@ -6,31 +6,40 @@
 std::string generate_hpu_bconv_body_asm(
     int num_q,
     int num_p,
-    int obj_q_base,
-    int obj_tmp_base,
-    int obj_p_base,
-    int obj_qhat_inv_base,
-    int obj_qhat_modp_base,
-    int mod_ctx_q_base,
-    int mod_ctx_p_base,
     bool append_psync)
 {
     std::ostringstream asm_code;
+
+    // 根据 HPU 硬件限制，只能存入 3 个多项式对象
+    // 我们将复用固定的 3 个寄存器槽位：0, 1, 2
+    const int POBJ_TMP_A = 0;
+    const int POBJ_TMP_B = 1;
+    const int POBJ_ACC   = 2;
+    // 模上下文对象槽位
+    const int POBJ_MOD_CTX = 4;
 
     // ==========================================
     // 阶段一：预处理 (Pre-multiply)
     // 对每个输入基 q_j 计算: x_j = [a_j * q_hat_inv] mod q_j
     // ==========================================
+    // 一次性读取所有的模上下文到对象 POBJ_MOD_CTX 中
+    asm_code << "        // dload all mod contexts (placeholder)\n";
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+
     asm_code << "        /* --- STAGE 1: Precompute in Input Basis Q --- */\n";
     for (int j = 0; j < num_q; ++j) {
-        const int obj_q = obj_q_base + j;
-        const int obj_inv = obj_qhat_inv_base + j;
-        const int obj_tmp = obj_tmp_base + j;
-        const int obj_mod_ctx_q = mod_ctx_q_base + j;
-
         asm_code << "        /* Context: q_" << j << " */\n";
-        asm_code << hpu::pmodld(obj_mod_ctx_q);
-        asm_code << hpu::pmul(obj_tmp, obj_q, obj_inv);
+        // 使用 pmodld 的第二个参数作为识别 id 从对象中读取不同的模上下文
+        asm_code << hpu::pmodld(POBJ_MOD_CTX, j);
+
+        asm_code << "        // dload q_j and qhat_inv_j (placeholder)\n";
+        asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
+        asm_code << hpu::dload("x0", "x0", POBJ_TMP_B, hpu::DataType::poly);
+
+        asm_code << hpu::pmul(POBJ_TMP_A, POBJ_TMP_A, POBJ_TMP_B);
+
+        asm_code << "        // dstore x_j to tmp memory (placeholder)\n";
+        asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
     }
 
     // ==========================================
@@ -39,22 +48,26 @@ std::string generate_hpu_bconv_body_asm(
     // ==========================================
     asm_code << "        /* --- STAGE 2: Accumulate in Target Basis P --- */\n";
     for (int i = 0; i < num_p; ++i) {
-        const int obj_acc = obj_p_base + i;
-        const int obj_mod_ctx_p = mod_ctx_p_base + i;
-
         asm_code << "        /* Context: p_" << i << " */\n";
-        asm_code << hpu::pmodld(obj_mod_ctx_p);
+        // 假设 Q 和 P 的上下文都在同一个 dload 中或者 DMA 给的是完整连续区间
+        // 或者是 pmodld 的第二个参数延续编号，这里假设 id 接着 num_q，或者是单独的 0~num_p
+        // 我们传入 i，但如果是同一份文件或者连续地址，由于这是独立编译的 UT ASM，使用对应 id
+        asm_code << hpu::pmodld(POBJ_MOD_CTX, num_q + i);
 
         for (int j = 0; j < num_q; ++j) {
-            const int obj_tmp = obj_tmp_base + j;
-            const int obj_coeff = obj_qhat_modp_base + (i * num_q) + j;
+            asm_code << "        // dload x_j and qhat_modp_j_i (placeholder)\n";
+            asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
+            asm_code << hpu::dload("x0", "x0", POBJ_TMP_B, hpu::DataType::poly);
 
             if (j == 0) {
-                asm_code << hpu::pmul(obj_acc, obj_tmp, obj_coeff);
+                asm_code << hpu::pmul(POBJ_ACC, POBJ_TMP_A, POBJ_TMP_B);
             } else {
-                asm_code << hpu::pmac(obj_acc, obj_tmp, obj_coeff);
+                asm_code << hpu::pmac(POBJ_ACC, POBJ_TMP_A, POBJ_TMP_B);
             }
         }
+        
+        asm_code << "        // dstore Acc_i to target memory (placeholder)\n";
+        asm_code << hpu::dstore("x0", "x0", POBJ_ACC, 0);
     }
 
     if (append_psync) {
@@ -67,13 +80,6 @@ std::string generate_hpu_bconv_body_asm(
 std::string generate_hpu_bconv_asm(
     int num_q,
     int num_p,
-    int obj_q_base,
-    int obj_tmp_base,
-    int obj_p_base,
-    int obj_qhat_inv_base,
-    int obj_qhat_modp_base,
-    int mod_ctx_q_base,
-    int mod_ctx_p_base,
     bool append_psync)
 {
     std::ostringstream asm_code;
@@ -89,13 +95,6 @@ std::string generate_hpu_bconv_asm(
     asm_code << generate_hpu_bconv_body_asm(
         num_q,
         num_p,
-        obj_q_base,
-        obj_tmp_base,
-        obj_p_base,
-        obj_qhat_inv_base,
-        obj_qhat_modp_base,
-        mod_ctx_q_base,
-        mod_ctx_p_base,
         append_psync);
 
     asm_code << "        : \n";

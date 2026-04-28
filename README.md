@@ -43,13 +43,13 @@ cmake --build . -j
 - `obj_poly_a = 0`
 - `obj_poly_b = 1`
 - `mod_ctx_obj = 2`
-- `shf_cfg_obj = 3`
+- `shf_cfg_obj = 2`（与 `mod_ctx_obj` 共享临时槽位，顺序装载）
 
 ### MM
 - `obj_a = 0`
 - `obj_b = 1`
 - `obj_c = 2`
-- `mod_ctx_obj = 3`
+- `mod_ctx_obj = 2`
 
 ### BCONV
 - `num_q = 1`
@@ -107,7 +107,8 @@ cmake --build . -j
 本项目不会做越界检查，调用方需要保证：
 
 - `N` 为 2 的幂（NTT需要传入以确定 Stage 层数）
-- 各对象槽位 ID 与硬件对象管理保持一致
+- 仅允许 3 个工作槽位：`p0/p1/p2`
+- 复杂算子（PMULT/CMULT/MODUP/MODDOWN）使用 `dload/dstore` 流式搬运，不在本地长期保留多基对象
 - `pmodld`/`pshcfg` 对应对象槽位已通过 `dload` 准备好模上下文与 shuffle 配置
 - 需要阶段收敛时使用 `psync`
 

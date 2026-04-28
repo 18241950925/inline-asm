@@ -32,18 +32,18 @@ std::string generate_hpu_ntt_body_asm(
 
     const int logN = static_cast<int>(std::log2(static_cast<double>(N)));
 
-    // 新版 ISA：通过对象槽位装载模上下文与 Shuffle 配置
-    asm_code << hpu::pmodld(mod_ctx_obj);
-    asm_code << hpu::pshcfg(shf_cfg_obj);
-
     int src_obj = obj_poly_a;
     int dst_obj = obj_poly_b;
+
+    asm_code << "        // dload all mod contexts (placeholder)\n";
+    asm_code << hpu::dload("x10", "x11", mod_ctx_obj, hpu::DataType::mod_ctx);
 
     // 新版 NTT：软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
     for (int stage = 0; stage < logN; ++stage) {
         asm_code << "\n        // ==========================================\n";
         asm_code << "        // Stage " << stage << " (Stage-level pntt)\n";
         asm_code << "        // ==========================================\n";
+        asm_code << hpu::pmodld(mod_ctx_obj, 0);
         asm_code << hpu::pntt(dst_obj, src_obj, stage, 0);
         std::swap(src_obj, dst_obj);
     }
@@ -73,18 +73,18 @@ std::string generate_hpu_intt_body_asm(
 
     const int logN = static_cast<int>(std::log2(static_cast<double>(N)));
 
-    // 新版 ISA：通过对象槽位装载模上下文与 Shuffle 配置
-    asm_code << hpu::pmodld(mod_ctx_obj);
-    asm_code << hpu::pshcfg(shf_cfg_obj);
-
     int src_obj = obj_poly_a;
     int dst_obj = obj_poly_b;
+
+    asm_code << "        // dload all mod contexts (placeholder)\n";
+    asm_code << hpu::dload("x10", "x11", mod_ctx_obj, hpu::DataType::mod_ctx);
 
     // 新版 INTT：软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
     for (int stage = 0; stage < logN; ++stage) {
         asm_code << "\n        // ==========================================\n";
         asm_code << "        // Stage " << stage << " (Stage-level pintt)\n";
         asm_code << "        // ==========================================\n";
+        asm_code << hpu::pmodld(mod_ctx_obj, 0);
         asm_code << hpu::pintt(dst_obj, src_obj, stage, 0);
         std::swap(src_obj, dst_obj);
     }
