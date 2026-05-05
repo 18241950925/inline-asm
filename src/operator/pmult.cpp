@@ -44,10 +44,10 @@ std::string generate_hpu_pmult_asm(
     const int POBJ_PT = 1;
     const int POBJ_OUT = 2;
 
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
     for (int i = 0; i < num_q; ++i) {
         asm_code << "        /* q_" << i << " */\n";
-        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
-        asm_code << hpu::pmodld(POBJ_MOD_CTX);
+        asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
 
         asm_code << hpu::dload("x0", "x0", POBJ_CT, hpu::DataType::poly);
         asm_code << hpu::dload("x0", "x0", POBJ_PT, hpu::DataType::poly);

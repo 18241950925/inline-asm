@@ -17,6 +17,7 @@ std::string generate_hpu_moddown_body_asm(
     const int POBJ_MOD_CTX = 4;
     const int POBJ_Q = 0;
     const int POBJ_CORR = 1;
+    const int POBJ_P_INV = 2; //用于存放 P^{-1} mod q_i
 
     asm_code << "        /* MODDOWN stage-1: BConv P -> Q (correction term) */\n";
     // 复用 bconv 主体：输入基改为 P，目标基改为 Q。
@@ -35,8 +36,11 @@ std::string generate_hpu_moddown_body_asm(
 
         asm_code << hpu::dload("x0", "x0", POBJ_Q, hpu::DataType::poly);
         asm_code << hpu::dload("x0", "x0", POBJ_CORR, hpu::DataType::poly);
+        asm_code << hpu::dload("x0", "x0", POBJ_P_INV, hpu::DataType::poly);
         
         asm_code << hpu::psub(POBJ_Q, POBJ_Q, POBJ_CORR);
+        asm_code << hpu::pmul(POBJ_Q, POBJ_Q, POBJ_P_INV);
+        
         asm_code << hpu::dstore("x0", "x0", POBJ_Q, 0);
     }
 
