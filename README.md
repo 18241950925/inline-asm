@@ -1,18 +1,27 @@
-## 1. 项目结构：
+# HPU Inline Assembly Codegen
 
-- `main.cpp`：给了 3 组示例参数，调用 3 个生成器并打印汇编文本
-- `util/hpu_asm.hpp`：新版 HPU 汇编指令生成的公共接口文件，符合最新的 6 字段格式。
-- `util/ntt.cpp`：按 stage 推进的 NTT 汇编生成（对象槽位语义）
-- `util/mm.cpp`：对象槽位上的 `pmul` 汇编生成
-- `util/bconv.cpp`：对象槽位上的 Basis Conversion 两阶段汇编生成
+本项目用于为全同态加密在自研 HPU（Homomorphic Processing Unit）硬件上，提供 C++ 内联汇编（Inline Assembly）的生成器。项目基于 HPU 的 3-bit 寻址槽位和流水线执行语义进行抽象，支持从底层通用计算直至高层复杂 FHE 算子的自动代码生成。
 
-对应接口（已根据最新 HPU 架构移除切分参数 `l` 和部分不需要的外层控制参数）：
+## 1. 项目结构
 
-- `generate_hpu_ntt_asm(...)`
-- `generate_hpu_mm_asm(...)`
-- `generate_hpu_bconv_asm(...)`
+代码按照功能依赖分层，并分别维护在 `include` 及 `src` 目录下，包含三大类模块：
 
-并且新增了由生成器生成的详细手册：`HPU_INSTRUCTION_MANUAL.md` 供负责后端的同学将其转译成机器码。
+### 1) 基础工具层 (`util`)
+- **`util/hpu_asm.hpp/cpp`**：基础 HPU 汇编助记符封装和生成接口，遵循《HPU_INSTRUCTION_MANUAL.md》。
+- **`util/ntt.hpp/cpp`**：按 stage 推进的基于对象槽位语义的 NTT / INTT 汇编生成。
+- **`util/mm.hpp/cpp`**：对象槽位级别的四则运算，特别是逐点向量乘法、乘加积累等（`pmul` / `pmac`）。
+- **`util/bconv.hpp/cpp`**：对象槽位上带参数 `q_offset` 支持分组扩展的基础 Basis Conversion 两阶段汇编生成。
+
+### 2) 多项式级操作层 (`poly`)
+调用并复用 `util` 层的基础算子，组合出同态相关的复杂多项式算子：
+- **`poly/pmult.hpp/cpp`**：明密文相乘 (Plaintext-Ciphertext Multiplication)。
+- **`poly/cmult.hpp/cpp`**：密文相乘 (Ciphertext-Ciphertext Multiplication)。
+- **`poly/modup.hpp/cpp`**：模提升 (ModUp) 操作，负责将 $Q$ 基下的残差提升扩展到 $Q \cup P$。
+- **`poly/moddown.hpp/cpp`**：模回缩 (ModDown) 操作，负责将中间结果缩放回 $Q$ 基，纠正缩放因子。
+
+### 3) 高级算子层 (`operator`)
+拼装多项式级与基础工具算子，完整实现核心同态运算：
+- **`operator/keyswitch.hpp/cpp`**：完整密钥切换 (KeySwitch) 逻辑生成，包含切片循环（密文分解，由参数 `dnum` 控制）、ModUp、多基 NTT、与 Evk (评估密钥) 点乘累加、INTT、以及 ModDown 缩放累加操作的全工作流流水线。
 
 ---
 
@@ -26,85 +35,41 @@ cmake --build . -j
 ./inline_asm_codegen
 ```
 
-运行后会打印三段文本：
-
-- `===== NTT ASM =====`
-- `===== MM ASM =====`
-- `===== BCONV ASM =====`
-
-每段都是可以嵌入 C/C++ 的 `__asm__ volatile(...)` 字符串代码。
+运行时程序会在运行级所在目录自动创建 `output/` 文件夹，并将所有的生成的汇编函数保存在其中（对应的 CPP 头文件包含了可直接被 GCC 编译的 `__asm__ volatile()` 块）：
+- `output/ntt.cpp`
+- `output/intt.cpp`
+- `output/mm.cpp`
+- `output/bconv.cpp`
+- `output/pmult.cpp`
+- `output/cmult.cpp`
+- `output/modup.cpp`
+- `output/moddown.cpp`
+- `output/keyswitch.cpp`
 
 ---
 
 ## 3. 当前示例参数（main.cpp）
 
-### NTT
-- `N = 64`
-- `obj_poly_a = 0`
-- `obj_poly_b = 1`
-- `mod_ctx_obj = 2`
-- `shf_cfg_obj = 2`（与 `mod_ctx_obj` 共享临时槽位，顺序装载）
+入口文件 `src/main.cpp` 对所有操作函数进行了组合测试。
 
-### MM
-- `obj_a = 0`
-- `obj_b = 1`
-- `obj_c = 2`
-- `mod_ctx_obj = 2`
 
-### BCONV
-- `num_q = 1`
-- `num_p = 1`
-- `obj_q_base = 0`
-- `obj_tmp_base = 1`
-- `obj_p_base = 2`
-- `obj_qhat_inv_base = 3`
-- `obj_qhat_modp_base = 4`
-- `mod_ctx_q_base = 5`
-- `mod_ctx_p_base = 6`
+## 4. 关键设计实现说明
 
----
-
-## 4. 具体实现
-
-## 4.1 NTT（`util/ntt.cpp`）
-
-- 对齐 HPU 文档，改为 **对象槽位 + stage 指令粒度**，并且去除了参数 `l` 统一执行。
-- 初始化阶段：
-  - `pmodld p<mod_ctx_obj>, 0, 0`
-  - `pshcfg p<shf_cfg_obj>, 0, 0`
-- 主循环执行 `stage = 0..log2(N)-1`：
-  - `pntt pdst, psrc, stage, 0, 0`
-  - 通过两个对象槽位做 ping-pong（`obj_poly_a`/`obj_poly_b`）
-- 可选追加 `psync 0, 0` 作为阶段同步屏障
-
-## 4.2 MM（`util/mm.cpp`）
-
-- 彻底转为底层流式化对象处理，无需传入 `N` 和 `l` 按 `chunk` 模拟迭代。
-- 入口先装载模上下文：`pmodld p<mod_ctx_obj>, 0, 0`
-- 直接对于整个多项式对象生成 `pmul p<obj_a>, p<obj_b>, p<obj_c>`
-- 可选追加 `psync 0, 0`
-
-## 4.3 BCONV（`util/bconv.cpp`）
-
-已移除内部基于 `chunk` 的计算过程，分两阶段执行：
-
-- **Stage 1（Q 基预处理）**
-  - 对每个 `q_j`：`pmodld p<mod_ctx_q_base + j>, 0, 0`
-  - `x_j = a_j * q_hat_inv_j (mod q_j)`
-  - 生成 `pmul p<obj_q_j>, p<obj_qhat_inv_j>, p<obj_tmp_j>`
-
-- **Stage 2（P 基累加）**
-  - 对每个 `p_i`：`pmodld p<mod_ctx_p_base + i>, 0, 0`
-  - 累加 `x_j * q_hat_j(mod p_i)`
-  - 第一次用 `pmul` 初始化累加，后续用 `pmac` 累加到 `p<obj_p_i>`
-- 可选追加 `psync 0, 0`
+- **基于 HPU 对象槽的内存映射与 Ping-Pong 特性：**
+  底层不再关注向量的大块切片 `l`，针对 `stage=0~log2(N)-1` 级别的蝶形运算，使用两个槽位如 `TMP_A` 和 `TMP_B` 进行 Ping-Pong（滚动），并能在编译期判定 `stage` 结束后存放的准确槽位进行回写。
+  
+- **切片感知的模提升运算：**
+  为了支持分解字（Digit Decomposition），`modup` / `bconv` 在接口中新加入了 `q_offset` 参数与处理宽度 `num_q_digit`。使得在 `dnum > 1` 的外层循环下，基扩展算字能智能地识别应该处理当前分解下哪一部分素数环境与基偏移。
+  
+- **流水线的统一复用：**
+  复杂的算子（如 `keyswitch`）不需要从头生成具体的 `hpu::pmul` 等语句。全部由底层统一拆解后的 `generate_hpu_*_body_asm` (Body Generator) 函数段拼接而成，避免了多次复制 DMA 及状态上下文切分代码。
 
 
 ---
 
 ## 5. 对象槽位与参数注意事项
 
-本项目不会做越界检查，调用方需要保证：
+调用方需要保证：
 
 - `N` 为 2 的幂（NTT需要传入以确定 Stage 层数）
 - 仅允许 3 个工作槽位：`p0/p1/p2`
