@@ -1,4 +1,4 @@
-#include "operator/pmult.hpp"
+#include "poly/pmult.hpp"
 
 #include "util/hpu_asm.hpp"
 #include "util/mm.hpp"

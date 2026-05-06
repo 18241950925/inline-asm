@@ -6,6 +6,7 @@
 std::string generate_hpu_bconv_body_asm(
     int num_q,
     int num_p,
+    int q_offset,
     bool append_psync)
 {
     std::ostringstream asm_code;
@@ -28,9 +29,10 @@ std::string generate_hpu_bconv_body_asm(
 
     asm_code << "        /* --- STAGE 1: Precompute in Input Basis Q --- */\n";
     for (int j = 0; j < num_q; ++j) {
-        asm_code << "        /* Context: q_" << j << " */\n";
+        int actual_q_idx = q_offset + j;
+        asm_code << "        /* Context: q_" << actual_q_idx << " */\n";
         // 使用 pmodld 的第二个参数作为识别 id 从对象中读取不同的模上下文
-        asm_code << hpu::pmodld(POBJ_MOD_CTX, j);
+        asm_code << hpu::pmodld(POBJ_MOD_CTX, actual_q_idx);
 
         asm_code << "        // dload q_j and qhat_inv_j (placeholder)\n";
         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
@@ -52,7 +54,7 @@ std::string generate_hpu_bconv_body_asm(
         // 假设 Q 和 P 的上下文都在同一个 dload 中或者 DMA 给的是完整连续区间
         // 或者是 pmodld 的第二个参数延续编号，这里假设 id 接着 num_q，或者是单独的 0~num_p
         // 我们传入 i，但如果是同一份文件或者连续地址，由于这是独立编译的 UT ASM，使用对应 id
-        asm_code << hpu::pmodld(POBJ_MOD_CTX, num_q + i);
+        asm_code << hpu::pmodld(POBJ_MOD_CTX, q_offset + num_q + i);
 
         for (int j = 0; j < num_q; ++j) {
             asm_code << "        // dload x_j and qhat_modp_j_i (placeholder)\n";
@@ -80,6 +82,7 @@ std::string generate_hpu_bconv_body_asm(
 std::string generate_hpu_bconv_asm(
     int num_q,
     int num_p,
+    int q_offset,
     bool append_psync)
 {
     std::ostringstream asm_code;
@@ -95,6 +98,7 @@ std::string generate_hpu_bconv_asm(
     asm_code << generate_hpu_bconv_body_asm(
         num_q,
         num_p,
+        q_offset,
         append_psync);
 
     asm_code << "        : \n";

@@ -1,13 +1,16 @@
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 
 #include "util/bconv.hpp"
 #include "util/mm.hpp"
 #include "util/ntt.hpp"
-#include "operator/cmult.hpp"
-#include "operator/moddown.hpp"
-#include "operator/modup.hpp"
-#include "operator/pmult.hpp"
+#include "poly/cmult.hpp"
+#include "poly/moddown.hpp"
+#include "poly/modup.hpp"
+#include "poly/pmult.hpp"
+#include "operator/keyswitch.hpp"
 
 namespace {
 
@@ -88,7 +91,8 @@ void test_intt_codegen() {
 		kNttCfg.obj_poly_b,
 		kNttCfg.mod_ctx_obj,
 		kNttCfg.shf_cfg_obj);
-	std::cout << "===== INTT ASM =====\n" << intt << "\n";
+	std::ofstream("output/intt.cpp") << intt;
+	std::cout << "Saved intt ASM to output/intt.cpp\n";
 }
 
 void test_ntt_codegen()
@@ -99,7 +103,8 @@ void test_ntt_codegen()
 		kNttCfg.obj_poly_b,
 		kNttCfg.mod_ctx_obj,
 		kNttCfg.shf_cfg_obj);
-	std::cout << "===== NTT ASM =====\n" << ntt << "\n";
+	std::ofstream("output/ntt.cpp") << ntt;
+	std::cout << "Saved ntt ASM to output/ntt.cpp\n";
 }
 
 void test_mm_codegen()
@@ -109,7 +114,8 @@ void test_mm_codegen()
 		kMmCfg.obj_b,
 		kMmCfg.obj_c,
 		kMmCfg.mod_ctx_obj);
-	std::cout << "===== MM ASM =====\n" << mm << "\n";
+	std::ofstream("output/mm.cpp") << mm;
+	std::cout << "Saved mm ASM to output/mm.cpp\n";
 }
 
 void test_bconv_codegen()
@@ -117,7 +123,8 @@ void test_bconv_codegen()
 	std::string bconv = generate_hpu_bconv_asm(
 		kBconvCfg.num_q,
 		kBconvCfg.num_p);
-	std::cout << "===== BCONV ASM =====\n" << bconv << "\n";
+	std::ofstream("output/bconv.cpp") << bconv;
+	std::cout << "Saved bconv ASM to output/bconv.cpp\n";
 }
 
 void test_pmult_codegen()
@@ -125,7 +132,8 @@ void test_pmult_codegen()
 	std::string pmult = generate_hpu_pmult_asm(
 		kPmultCfg.num_q,
 		true);
-	std::cout << "===== PMULT ASM =====\n" << pmult << "\n";
+	std::ofstream("output/pmult.cpp") << pmult;
+	std::cout << "Saved pmult ASM to output/pmult.cpp\n";
 }
 
 void test_cmult_codegen()
@@ -133,7 +141,8 @@ void test_cmult_codegen()
 	std::string cmult = generate_hpu_cmult_asm(
 		kCmultCfg.num_q,
 		true);
-	std::cout << "===== CMULT ASM =====\n" << cmult << "\n";
+	std::ofstream("output/cmult.cpp") << cmult;
+	std::cout << "Saved cmult ASM to output/cmult.cpp\n";
 }
 
 void test_modup_codegen()
@@ -142,7 +151,8 @@ void test_modup_codegen()
 		kBconvCfg.num_q,
 		kBconvCfg.num_p,
 		true);
-	std::cout << "===== MODUP ASM =====\n" << modup << "\n";
+	std::ofstream("output/modup.cpp") << modup;
+	std::cout << "Saved modup ASM to output/modup.cpp\n";
 }
 
 void test_moddown_codegen()
@@ -151,13 +161,24 @@ void test_moddown_codegen()
 		kModdownCfg.num_q,
 		kModdownCfg.num_p,
 		true);
-	std::cout << "===== MODDOWN ASM =====\n" << moddown << "\n";
+	std::ofstream("output/moddown.cpp") << moddown;
+	std::cout << "Saved moddown ASM to output/moddown.cpp\n";
+}
+
+void test_keyswitch_codegen()
+{
+	// test with N=4096, num_q=4, num_p=3, dnum=2
+	std::string keyswitch = generate_hpu_keyswitch_asm(
+		4096, 4, 3, 2, true);
+	std::ofstream("output/keyswitch.cpp") << keyswitch;
+	std::cout << "Saved keyswitch ASM to output/keyswitch.cpp\n";
 }
 
 } // namespace
 
 int main()
 {
+	std::filesystem::create_directory("output");
 	test_ntt_codegen();
 	test_intt_codegen();
 	test_mm_codegen();
@@ -166,5 +187,6 @@ int main()
 	test_cmult_codegen();
 	test_modup_codegen();
 	test_moddown_codegen();
+	test_keyswitch_codegen();
 	return 0;
 }

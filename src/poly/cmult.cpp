@@ -1,4 +1,4 @@
-#include "operator/cmult.hpp"
+#include "poly/cmult.hpp"
 
 #include "util/hpu_asm.hpp"
 #include "util/mm.hpp"

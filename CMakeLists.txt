@@ -12,10 +12,11 @@ add_executable(inline_asm_codegen
         src/util/ntt.cpp
         src/util/mm.cpp
         src/util/bconv.cpp
-        src/operator/modup.cpp
-        src/operator/moddown.cpp
-        src/operator/pmult.cpp
-        src/operator/cmult.cpp
+        src/poly/modup.cpp
+        src/poly/moddown.cpp
+        src/poly/pmult.cpp
+        src/poly/cmult.cpp
+        src/operator/keyswitch.cpp
 )
 
 target_include_directories(inline_asm_codegen

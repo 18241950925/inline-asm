@@ -43,7 +43,7 @@ std::string generate_hpu_ntt_body_asm(
         asm_code << "\n        // ==========================================\n";
         asm_code << "        // Stage " << stage << " (Stage-level pntt)\n";
         asm_code << "        // ==========================================\n";
-        asm_code << hpu::pmodld(mod_ctx_obj, 0);
+        asm_code << hpu::pmodld(mod_ctx_obj, stage);   // 通过加载而不是在线计算推进twiddle
         asm_code << hpu::pntt(dst_obj, src_obj, stage, 0);
         std::swap(src_obj, dst_obj);
     }
@@ -84,7 +84,7 @@ std::string generate_hpu_intt_body_asm(
         asm_code << "\n        // ==========================================\n";
         asm_code << "        // Stage " << stage << " (Stage-level pintt)\n";
         asm_code << "        // ==========================================\n";
-        asm_code << hpu::pmodld(mod_ctx_obj, 0);
+        asm_code << hpu::pmodld(mod_ctx_obj, stage);
         asm_code << hpu::pintt(dst_obj, src_obj, stage, 0);
         std::swap(src_obj, dst_obj);
     }

@@ -1,4 +1,4 @@
-#include "operator/moddown.hpp"
+#include "poly/moddown.hpp"
 
 #include "util/bconv.hpp"
 #include "util/hpu_asm.hpp"
