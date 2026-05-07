@@ -32,8 +32,19 @@ mkdir -p build
 cd build
 cmake ..
 cmake --build . -j
-./inline_asm_codegen
 ```
+构建完成后，生成的可执行文件 `inline_asm_codegen` 支持通过命令行参数控制输出内容：
+```bash
+# 只输出 .asm 文件
+./build/inline_asm_codegen asm
+
+# 只输出 .cpp 文件
+./build/inline_asm_codegen cpp
+
+# 两者皆输出 (默认行为，等价于不传参)
+./build/inline_asm_codegen both
+```
+
 
 运行时程序会在运行级所在目录自动创建 `output/` 文件夹，并将所有的生成的汇编函数保存在其中（对应的 CPP 头文件包含了可直接被 GCC 编译的 `__asm__ volatile()` 块）：
 - `output/ntt.cpp`

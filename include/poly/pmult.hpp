@@ -2,6 +2,10 @@
 
 #include <string>
 
+std::string generate_hpu_pmult_body_asm(
+    int num_q,
+    bool append_psync = false);
+
 std::string generate_hpu_pmult_asm(
     int num_q,
     bool append_psync = false);

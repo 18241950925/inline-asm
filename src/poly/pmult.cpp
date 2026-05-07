@@ -23,20 +23,17 @@ int final_slot_after_stages(int N, int obj_a, int obj_b)
 
 } // namespace
 
-std::string generate_hpu_pmult_asm(
+std::string generate_hpu_pmult_body_asm(
     int num_q,
     bool append_psync)
 {
     std::ostringstream asm_code;
-    asm_code << "void hpu_pmult_Q" << num_q << "(void) {\n";
 
     if (num_q <= 0) {
-        asm_code << "    // Invalid config: require num_q > 0\n";
-        asm_code << "}\n";
+        asm_code << "        // Invalid config: require num_q > 0\n";
         return asm_code.str();
     }
 
-    asm_code << "    __asm__ volatile(\n";
     asm_code << "        /* PMULT: (ct0, ct1) * pt over RNS basis Q */\n";
 
     const int POBJ_MOD_CTX = 4;
@@ -62,6 +59,25 @@ std::string generate_hpu_pmult_asm(
     if (append_psync) {
         asm_code << hpu::psync(0);
     }
+
+    return asm_code.str();
+}
+
+std::string generate_hpu_pmult_asm(
+    int num_q,
+    bool append_psync)
+{
+    std::ostringstream asm_code;
+    asm_code << "void hpu_pmult_Q" << num_q << "(void) {\n";
+
+    if (num_q <= 0) {
+        asm_code << "    // Invalid config: require num_q > 0\n";
+        asm_code << "}\n";
+        return asm_code.str();
+    }
+
+    asm_code << "    __asm__ volatile(\n";
+    asm_code << generate_hpu_pmult_body_asm(num_q, append_psync);
 
     asm_code << "        : \n";
     asm_code << "        : \n";

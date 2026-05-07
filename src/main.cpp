@@ -14,12 +14,20 @@
 
 namespace {
 
+enum class OutputMode {
+	CPP,
+	ASM,
+	BOTH
+};
+
+OutputMode g_output_mode = OutputMode::BOTH;
+
 struct NttConfig {
 	int N;
 	int obj_poly_a;
 	int obj_poly_b;
 	int mod_ctx_obj;
-	int shf_cfg_obj;
+	int twiddle_obj;
 };
 
 struct MmConfig {
@@ -85,99 +93,210 @@ constexpr CmultConfig kCmultCfg{1, 0, 1, 2, 3, 4, 5, 6, 7};
 constexpr ModdownConfig kModdownCfg{1, 1, 0, 1, 2, 3, 4, 5, 6, 7};
 
 void test_intt_codegen() {
-	std::string intt = generate_hpu_intt_asm(
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string intt = generate_hpu_intt_asm(
 		kNttCfg.N,
 		kNttCfg.obj_poly_a,
 		kNttCfg.obj_poly_b,
 		kNttCfg.mod_ctx_obj,
-		kNttCfg.shf_cfg_obj);
+		kNttCfg.twiddle_obj);
 	std::ofstream("output/intt.cpp") << intt;
 	std::cout << "Saved intt ASM to output/intt.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string intt_body = generate_hpu_intt_body_asm(
+		kNttCfg.N,
+		kNttCfg.obj_poly_a,
+		kNttCfg.obj_poly_b,
+		kNttCfg.mod_ctx_obj,
+		kNttCfg.twiddle_obj);
+	std::ofstream("output/intt.asm") << intt_body;
+	std::cout << "Saved intt body ASM to output/intt.asm\n";
+	}
 }
 
 void test_ntt_codegen()
 {
-	std::string ntt = generate_hpu_ntt_asm(
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string ntt = generate_hpu_ntt_asm(
 		kNttCfg.N,
 		kNttCfg.obj_poly_a,
 		kNttCfg.obj_poly_b,
 		kNttCfg.mod_ctx_obj,
-		kNttCfg.shf_cfg_obj);
+		kNttCfg.twiddle_obj);
 	std::ofstream("output/ntt.cpp") << ntt;
 	std::cout << "Saved ntt ASM to output/ntt.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string ntt_body = generate_hpu_ntt_body_asm(
+		kNttCfg.N,
+		kNttCfg.obj_poly_a,
+		kNttCfg.obj_poly_b,
+		kNttCfg.mod_ctx_obj,
+		kNttCfg.twiddle_obj);
+	std::ofstream("output/ntt.asm") << ntt_body;
+	std::cout << "Saved ntt body ASM to output/ntt.asm\n";
+	}
 }
 
 void test_mm_codegen()
 {
-	std::string mm = generate_hpu_mm_asm(
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string mm = generate_hpu_mm_asm(
 		kMmCfg.obj_a,
 		kMmCfg.obj_b,
 		kMmCfg.obj_c,
 		kMmCfg.mod_ctx_obj);
 	std::ofstream("output/mm.cpp") << mm;
 	std::cout << "Saved mm ASM to output/mm.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string mm_body = generate_hpu_mm_body_asm(
+		kMmCfg.obj_a,
+		kMmCfg.obj_b,
+		kMmCfg.obj_c);
+	std::ofstream("output/mm.asm") << mm_body;
+	std::cout << "Saved mm body ASM to output/mm.asm\n";
+	}
 }
 
 void test_bconv_codegen()
 {
-	std::string bconv = generate_hpu_bconv_asm(
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string bconv = generate_hpu_bconv_asm(
 		kBconvCfg.num_q,
 		kBconvCfg.num_p);
 	std::ofstream("output/bconv.cpp") << bconv;
 	std::cout << "Saved bconv ASM to output/bconv.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string bconv_body = generate_hpu_bconv_body_asm(
+		kBconvCfg.num_q,
+		kBconvCfg.num_p);
+	std::ofstream("output/bconv.asm") << bconv_body;
+	std::cout << "Saved bconv body ASM to output/bconv.asm\n";
+	}
 }
 
 void test_pmult_codegen()
 {
-	std::string pmult = generate_hpu_pmult_asm(
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string pmult = generate_hpu_pmult_asm(
 		kPmultCfg.num_q,
 		true);
 	std::ofstream("output/pmult.cpp") << pmult;
 	std::cout << "Saved pmult ASM to output/pmult.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string pmult_body = generate_hpu_pmult_body_asm(
+		kPmultCfg.num_q,
+		true);
+	std::ofstream("output/pmult.asm") << pmult_body;
+	std::cout << "Saved pmult body ASM to output/pmult.asm\n";
+	}
 }
 
 void test_cmult_codegen()
 {
-	std::string cmult = generate_hpu_cmult_asm(
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string cmult = generate_hpu_cmult_asm(
 		kCmultCfg.num_q,
 		true);
 	std::ofstream("output/cmult.cpp") << cmult;
 	std::cout << "Saved cmult ASM to output/cmult.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string cmult_body = generate_hpu_cmult_body_asm(
+		kCmultCfg.num_q,
+		true);
+	std::ofstream("output/cmult.asm") << cmult_body;
+	std::cout << "Saved cmult body ASM to output/cmult.asm\n";
+	}
 }
 
 void test_modup_codegen()
 {
-	std::string modup = generate_hpu_modup_asm(
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string modup = generate_hpu_modup_asm(
 		kBconvCfg.num_q,
 		kBconvCfg.num_p,
 		true);
 	std::ofstream("output/modup.cpp") << modup;
 	std::cout << "Saved modup ASM to output/modup.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string modup_body = generate_hpu_modup_body_asm(
+		kBconvCfg.num_q,
+		kBconvCfg.num_p,
+		true);
+	std::ofstream("output/modup.asm") << modup_body;
+	std::cout << "Saved modup body ASM to output/modup.asm\n";
+	}
 }
 
 void test_moddown_codegen()
 {
-	std::string moddown = generate_hpu_moddown_asm(
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string moddown = generate_hpu_moddown_asm(
 		kModdownCfg.num_q,
 		kModdownCfg.num_p,
 		true);
 	std::ofstream("output/moddown.cpp") << moddown;
 	std::cout << "Saved moddown ASM to output/moddown.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string moddown_body = generate_hpu_moddown_body_asm(
+		kModdownCfg.num_q,
+		kModdownCfg.num_p,
+		true);
+	std::ofstream("output/moddown.asm") << moddown_body;
+	std::cout << "Saved moddown body ASM to output/moddown.asm\n";
+	}
 }
 
 void test_keyswitch_codegen()
 {
 	// test with N=4096, num_q=4, num_p=3, dnum=2
-	std::string keyswitch = generate_hpu_keyswitch_asm(
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string keyswitch = generate_hpu_keyswitch_asm(
 		4096, 4, 3, 2, true);
 	std::ofstream("output/keyswitch.cpp") << keyswitch;
 	std::cout << "Saved keyswitch ASM to output/keyswitch.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string keyswitch_body = generate_hpu_keyswitch_body_asm(
+		4096, 4, 3, 2, true);
+	std::ofstream("output/keyswitch.asm") << keyswitch_body;
+	std::cout << "Saved keyswitch body ASM to output/keyswitch.asm\n";
+	}
 }
 
 } // namespace
 
-int main()
+int main(int argc, char* argv[])
 {
+	std::string mode = "both";
+	if (argc > 1) {
+		mode = argv[1];
+	}
+	
+	if (mode == "cpp") {
+		g_output_mode = OutputMode::CPP;
+	} else if (mode == "asm") {
+		g_output_mode = OutputMode::ASM;
+	} else {
+		g_output_mode = OutputMode::BOTH;
+	}
+
 	std::filesystem::create_directory("output");
 	test_ntt_codegen();
 	test_intt_codegen();

@@ -23,20 +23,17 @@ int final_slot_after_stages(int N, int obj_a, int obj_b)
 
 } // namespace
 
-std::string generate_hpu_cmult_asm(
+std::string generate_hpu_cmult_body_asm(
     int num_q,
     bool append_psync)
 {
     std::ostringstream asm_code;
-    asm_code << "void hpu_cmult_Q" << num_q << "(void) {\n";
 
     if (num_q <= 0) {
-        asm_code << "    // Invalid config: require num_q > 0\n";
-        asm_code << "}\n";
+        asm_code << "        // Invalid config: require num_q > 0\n";
         return asm_code.str();
     }
 
-    asm_code << "    __asm__ volatile(\n";
     asm_code << "        /* CMULT: (a0,a1)*(b0,b1)->(out0,out1,out2) over basis Q */\n";
 
     const int POBJ_MOD_CTX = 4;
@@ -46,11 +43,6 @@ std::string generate_hpu_cmult_asm(
 
     for (int i = 0; i < num_q; ++i) {
         asm_code << "        /* q_" << i << " */\n";
-        // To compute out0, out1, out2 we need a0, a1, b0, b1 which is > 3 objects.
-        // So we will do it step by step loading objects as needed:
-        // out0 = a0 * b0
-        // out1 = a0 * b1 + a1 * b0
-        // out2 = a1 * b1
 
         asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
         asm_code << hpu::pmodld(POBJ_MOD_CTX);
@@ -68,7 +60,6 @@ std::string generate_hpu_cmult_asm(
         asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 0); // store out2
 
         // a0 * b1 + a1 * b0
-        // Need to accumulate. 
         asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a0
         asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b1
         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A, POBJ_B);
@@ -83,6 +74,25 @@ std::string generate_hpu_cmult_asm(
     if (append_psync) {
         asm_code << hpu::psync(0);
     }
+
+    return asm_code.str();
+}
+
+std::string generate_hpu_cmult_asm(
+    int num_q,
+    bool append_psync)
+{
+    std::ostringstream asm_code;
+    asm_code << "void hpu_cmult_Q" << num_q << "(void) {\n";
+
+    if (num_q <= 0) {
+        asm_code << "    // Invalid config: require num_q > 0\n";
+        asm_code << "}\n";
+        return asm_code.str();
+    }
+
+    asm_code << "    __asm__ volatile(\n";
+    asm_code << generate_hpu_cmult_body_asm(num_q, append_psync);
 
     asm_code << "        : \n";
     asm_code << "        : \n";
