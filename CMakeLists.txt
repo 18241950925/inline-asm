@@ -12,6 +12,7 @@ add_executable(inline_asm_codegen
         src/util/ntt.cpp
         src/util/mm.cpp
         src/util/bconv.cpp
+        src/poly/auto.cpp
         src/poly/modup.cpp
         src/poly/moddown.cpp
         src/poly/pmult.cpp

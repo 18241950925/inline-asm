@@ -112,8 +112,11 @@ std::string generate_hpu_pmult_ntt_asm(
     const int POBJ_PT_NTT = 2;
     const int POBJ_CT_NTT = 0; // Reusing slot A for CT result
 
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+
     for (int i = 0; i < num_q; ++i) {
         asm_code << "        /* q_" << i << " */\n";
+        asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
         // Pre-NTT PT
         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_TMP_B, POBJ_MOD_CTX, POBJ_SHF, false);

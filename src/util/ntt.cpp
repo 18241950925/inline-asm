@@ -25,6 +25,8 @@ std::string generate_hpu_ntt_body_asm(
 {
     std::ostringstream asm_code;
 
+    (void)mod_ctx_obj; // placeholder: caller handles pmodld
+
     if (!is_power_of_two(N)) {
         asm_code << "        // Invalid config: require power-of-two N\n";
         return asm_code.str();
@@ -36,8 +38,7 @@ std::string generate_hpu_ntt_body_asm(
     int dst_obj = obj_poly_b;
 
     asm_code << "        // dload all mod contexts (placeholder)\n";
-    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx);
-    asm_code << hpu::pmodld(mod_ctx_obj, 0);
+    // 假设调用方已经加载过密文模数
     // 新版 NTT：软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
     for (int stage = 0; stage < logN; ++stage) {
         asm_code << "\n        // ==========================================\n";
@@ -46,6 +47,12 @@ std::string generate_hpu_ntt_body_asm(
         asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
         asm_code << hpu::pntt(dst_obj, src_obj, stage, 0);
         std::swap(src_obj, dst_obj);
+    }
+
+    if (src_obj != obj_poly_b) {
+        asm_code << "\n        // Ensure final result in dst obj\n";
+        asm_code << hpu::pmuli(obj_poly_b, src_obj, 1);
+        src_obj = obj_poly_b;
     }
 
     if (append_psync) {
@@ -66,6 +73,8 @@ std::string generate_hpu_intt_body_asm(
 {
     std::ostringstream asm_code;
 
+    (void)mod_ctx_obj; // placeholder: caller handles pmodld
+
     if (!is_power_of_two(N)) {
         asm_code << "        // Invalid config: require power-of-two N\n";
         return asm_code.str();
@@ -77,7 +86,7 @@ std::string generate_hpu_intt_body_asm(
     int dst_obj = obj_poly_b;
 
     asm_code << "        // dload all mod contexts (placeholder)\n";
-    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx);
+    // 假设调用方已经加载过密文模数
 
     // 新版 INTT：软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
     for (int stage = 0; stage < logN; ++stage) {
@@ -87,6 +96,12 @@ std::string generate_hpu_intt_body_asm(
         asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
         asm_code << hpu::pintt(dst_obj, src_obj, stage, 0);
         std::swap(src_obj, dst_obj);
+    }
+
+    if (src_obj != obj_poly_b) {
+        asm_code << "\n        // Ensure final result in dst obj\n";
+        asm_code << hpu::pmuli(obj_poly_b, src_obj, 1);
+        src_obj = obj_poly_b;
     }
 
     if (append_psync) {

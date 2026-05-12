@@ -55,6 +55,7 @@ cmake --build . -j
 - `output/cmult.cpp`
 - `output/modup.cpp`
 - `output/moddown.cpp`
+- `output/auto.cpp`
 - `output/keyswitch.cpp`
 
 ---

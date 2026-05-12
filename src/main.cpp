@@ -6,6 +6,7 @@
 #include "util/bconv.hpp"
 #include "util/mm.hpp"
 #include "util/ntt.hpp"
+#include "poly/auto.hpp"
 #include "poly/cmult.hpp"
 #include "poly/moddown.hpp"
 #include "poly/modup.hpp"
@@ -84,6 +85,14 @@ struct ModdownConfig {
 	int mod_ctx_q_base;
 };
 
+struct AutoConfig {
+	int N;
+	int num_q;
+	int num_p;
+	int dnum;
+	int auto_idx;
+};
+
 constexpr NttConfig kNttCfg{64, 0, 1, 2, 3};
 constexpr MmConfig kMmCfg{0, 1, 2, 3};
 // 为了演示 3-bit 槽位约束，示例采用 num_q = num_p = 1
@@ -91,6 +100,7 @@ constexpr BconvConfig kBconvCfg{1, 1, 0, 1, 2, 3, 4, 5, 6};
 constexpr PmultConfig kPmultCfg{1, 0, 1, 2, 3, 4, 5};
 constexpr CmultConfig kCmultCfg{1, 0, 1, 2, 3, 4, 5, 6, 7};
 constexpr ModdownConfig kModdownCfg{1, 1, 0, 1, 2, 3, 4, 5, 6, 7};
+constexpr AutoConfig kAutoCfg{4096, 4, 3, 2, 1};
 
 void test_intt_codegen() {
 	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
@@ -211,13 +221,13 @@ void test_cmult_codegen()
 	std::cout << "Saved cmult ASM to output/cmult.cpp\n";
 	}
 
-	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
-		std::string cmult_body = generate_hpu_cmult_body_asm(
-		kCmultCfg.num_q,
-		true);
-	std::ofstream("output/cmult.asm") << cmult_body;
-	std::cout << "Saved cmult body ASM to output/cmult.asm\n";
-	}
+	// if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+	// 	std::string cmult_body = generate_hpu_cmult_body_asm(
+	// 	kCmultCfg.num_q,
+	// 	true);
+	// std::ofstream("output/cmult.asm") << cmult_body;
+	// std::cout << "Saved cmult body ASM to output/cmult.asm\n";
+	// }
 }
 
 void test_modup_codegen()
@@ -238,6 +248,33 @@ void test_modup_codegen()
 		true);
 	std::ofstream("output/modup.asm") << modup_body;
 	std::cout << "Saved modup body ASM to output/modup.asm\n";
+	}
+}
+
+void test_auto_codegen()
+{
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string auto_code = generate_hpu_auto_asm(
+		kAutoCfg.N,
+		kAutoCfg.num_q,
+		kAutoCfg.num_p,
+		kAutoCfg.dnum,
+		kAutoCfg.auto_idx,
+		true);
+	std::ofstream("output/auto.cpp") << auto_code;
+	std::cout << "Saved auto ASM to output/auto.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string auto_body = generate_hpu_auto_body_asm(
+		kAutoCfg.N,
+		kAutoCfg.num_q,
+		kAutoCfg.num_p,
+		kAutoCfg.dnum,
+		kAutoCfg.auto_idx,
+		true);
+	std::ofstream("output/auto.asm") << auto_body;
+	std::cout << "Saved auto body ASM to output/auto.asm\n";
 	}
 }
 
@@ -306,6 +343,7 @@ int main(int argc, char* argv[])
 	test_cmult_codegen();
 	test_modup_codegen();
 	test_moddown_codegen();
+	test_auto_codegen();
 	test_keyswitch_codegen();
 	return 0;
 }
