@@ -6,7 +6,6 @@
 #include "util/mm.hpp"
 #include "util/ntt.hpp"
 
-#include <cmath>
 #include <sstream>
 #include <string>
 
@@ -15,12 +14,6 @@ namespace {
 bool is_power_of_two(int x)
 {
     return x > 0 && (x & (x - 1)) == 0;
-}
-
-int final_slot_after_stages(int N, int obj_a, int obj_b)
-{
-    const int logN = static_cast<int>(std::log2(static_cast<double>(N)));
-    return (logN % 2 == 0) ? obj_a : obj_b;
 }
 
 } // namespace
@@ -40,7 +33,6 @@ std::string generate_hpu_keyswitch_body_asm(
     const int POBJ_MOD_CTX = 4;
     const int TWIDDLE = 3; // Dummy for shuffle cfg
     const int POBJ_TMP_A = 0;
-    const int POBJ_TMP_B = 1;
 
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
 
@@ -61,9 +53,8 @@ std::string generate_hpu_keyswitch_body_asm(
             asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
             asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
             asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
-            asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_TMP_B, POBJ_MOD_CTX, TWIDDLE, false);
-            int final_slot = final_slot_after_stages(N, POBJ_TMP_A, POBJ_TMP_B);
-            asm_code << hpu::dstore("x0", "x0", final_slot, 0);
+            asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, POBJ_MOD_CTX, false);
+            asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 1);
         }
 
         // 3. Multiplication with Evk
@@ -86,7 +77,7 @@ std::string generate_hpu_keyswitch_body_asm(
                     asm_code << hpu::dload("x0", "x0", POBJ_OUT, hpu::DataType::poly); // Load accumulated result
                     asm_code << hpu::pmac(POBJ_OUT, POBJ_CT, POBJ_EVK);
                 }
-                asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 0);
+                asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1);
             }
         }
     }
@@ -96,7 +87,6 @@ std::string generate_hpu_keyswitch_body_asm(
     const int POBJ_MOD_CTX2 = 4;
     const int TWIDDLE2 = 3;
     const int POBJ_TMP_A2 = 0;
-    const int POBJ_TMP_B2 = 1;
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX2, hpu::DataType::mod_ctx);
     for (int v = 0; v < 2; ++v) {
         asm_code << "        /* INTT for out" << v << " */\n";
@@ -105,9 +95,8 @@ std::string generate_hpu_keyswitch_body_asm(
             asm_code << hpu::pmodld(POBJ_MOD_CTX2, i);
             asm_code << hpu::dload("x0", "x0", POBJ_TMP_A2, hpu::DataType::poly);
             asm_code << hpu::dload("x0", "x0", TWIDDLE2, hpu::DataType::poly);
-            asm_code << generate_hpu_intt_body_asm(N, POBJ_TMP_A2, POBJ_TMP_B2, POBJ_MOD_CTX2, TWIDDLE2, false);
-            int final_slot = final_slot_after_stages(N, POBJ_TMP_A2, POBJ_TMP_B2);
-            asm_code << hpu::dstore("x0", "x0", final_slot, 0);
+            asm_code << generate_hpu_intt_body_asm(N, POBJ_TMP_A2, TWIDDLE2, POBJ_MOD_CTX2, false);
+            asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A2, 1);
         }
     }
 
@@ -134,7 +123,7 @@ std::string generate_hpu_keyswitch_body_asm(
         // 3. 在片上直接相加
         asm_code << hpu::padd(POBJ_FINAL_OUT0, POBJ_OUT0, POBJ_C0);
         // 4. 写回主存
-        asm_code << hpu::dstore("x0", "x0", POBJ_FINAL_OUT0, 0);
+        asm_code << hpu::dstore("x0", "x0", POBJ_FINAL_OUT0, 1);
     }
 
     if (append_psync) {

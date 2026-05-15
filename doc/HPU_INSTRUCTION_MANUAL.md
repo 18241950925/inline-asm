@@ -42,12 +42,12 @@ HPU 指令分两类操作码通道：
 ### 2. STG 格式：Stage / Transform 执行类
 具有明显阶段性、流水化以及并行重排特征的指令操作（执行于 128 并行蝶形/重排模式）。
 
-* **操作数格式**: `mnemonic pdst, psrc, field_3, idx1, mode`
+* **操作数格式**: `mnemonic pdata, ptwiddle, field_3, idx1, mode`
 
 | 汇编指令名称 | 操作数示例及意义 | 译码说明 |
 | --- | --- | --- |
-| `pntt` | `pntt pdst, psrc, stage, idx1, mode` | 作用于完整对象，`stage`占用专属4-bit |
-| `pintt`| `pintt pdst, psrc, stage, idx1, mode` | 作用于完整对象，同上 |
+| `pntt` | `pntt pdata, ptwiddle, stage, idx1, mode` | 对 `pdata` 原地变换，`ptwiddle` 为 twiddle 对象，`stage`占用专属4-bit |
+| `pintt`| `pintt pdata, ptwiddle, stage, idx1, mode` | 对 `pdata` 原地变换，`ptwiddle` 为 twiddle 对象，同上 |
 | `pshuf`| `pshuf pdst, psrc, idx0, idx1, mode` | `idx0` 为Shuffle主模式，`idx1` 为参数化索引 |
 | `psample`|`psample pdst, psrc, idx0, idx1, mode` | `psrc` 现阶段预留填0，`idx0`选择分布类型 |
 

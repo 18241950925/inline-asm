@@ -67,8 +67,8 @@ cmake --build . -j
 
 ## 4. 关键设计实现说明
 
-- **基于 HPU 对象槽的内存映射与 Ping-Pong 特性：**
-  底层不再关注向量的大块切片 `l`，针对 `stage=0~log2(N)-1` 级别的蝶形运算，使用两个槽位如 `TMP_A` 和 `TMP_B` 进行 Ping-Pong（滚动），并能在编译期判定 `stage` 结束后存放的准确槽位进行回写。
+- **基于 HPU 对象槽的内存映射与原地 NTT/INTT：**
+  底层不再关注向量的大块切片 `l`。针对 `stage=0~log2(N)-1` 的蝶形运算，`pntt/pintt` 以**第一个对象槽位作为数据对象**进行原地变换，**第二个对象槽位作为 twiddle 对象**。调用方只需确保每个 stage 前装载对应 twiddle。
   
 - **切片感知的模提升运算：**
   为了支持分解字（Digit Decomposition），`modup` / `bconv` 在接口中新加入了 `q_offset` 参数与处理宽度 `num_q_digit`。使得在 `dnum > 1` 的外层循环下，基扩展算字能智能地识别应该处理当前分解下哪一部分素数环境与基偏移。
@@ -90,3 +90,6 @@ cmake --build . -j
 - 需要阶段收敛时使用 `psync`
 
 ---
+
+## TODO:
+统一密文到coff domain

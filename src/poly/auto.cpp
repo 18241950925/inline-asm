@@ -5,16 +5,11 @@
 #include "util/mm.hpp"
 #include "util/ntt.hpp"
 
-#include <cmath>
 #include <sstream>
 #include <string>
 
 namespace {
 bool is_power_of_two(int x) { return x > 0 && (x & (x - 1)) == 0; }
-int final_slot_after_stages(int N, int obj_a, int obj_b) {
-    const int logN = static_cast<int>(std::log2(static_cast<double>(N)));
-    return (logN % 2 == 0) ? obj_a : obj_b;
-}
 } // namespace
 
 std::string generate_hpu_auto_body_asm(
@@ -62,13 +57,13 @@ std::string generate_hpu_auto_body_asm(
 		// 加载twiddle
 		asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
         // NTT 转入频域
-        asm_code << generate_hpu_ntt_body_asm(N, SLOT_A, SLOT_B, POBJ_MOD_CTX, TWIDDLE, false);
+        asm_code << generate_hpu_ntt_body_asm(N, SLOT_A, TWIDDLE, POBJ_MOD_CTX, false);
         // 加载融合版twiddle
 		asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
         // iNTT 融合旋转因子 (完成移位并退出频域)
-        asm_code << generate_hpu_intt_body_asm(N, SLOT_B, SLOT_A, POBJ_MOD_CTX, TWIDDLE, false);
+        asm_code << generate_hpu_intt_body_asm(N, SLOT_A, TWIDDLE, POBJ_MOD_CTX, false);
         // 将旋转后的 c0 暂存回 HBM (开辟一块临时内存 "x_tmp_c0")
-        asm_code << hpu::dstore("x_tmp_c0", "x_offset", SLOT_A, 0); 
+        asm_code << hpu::dstore("x_tmp_c0", "x_offset", SLOT_A, 1); 
     }
 
     asm_code << "\n        /* ========================================================== */\n";
@@ -89,10 +84,9 @@ std::string generate_hpu_auto_body_asm(
 			// 加载twiddle
 			asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
             // 执行融合了 auto_idx 的 NTT
-            asm_code << generate_hpu_ntt_body_asm(N, SLOT_A, SLOT_B, POBJ_MOD_CTX, TWIDDLE, false);
-            int final_slot = final_slot_after_stages(N, SLOT_A, SLOT_B);
+            asm_code << generate_hpu_ntt_body_asm(N, SLOT_A, TWIDDLE, POBJ_MOD_CTX, false);
             // 将处于求值域(且已位移)的碎片写回 HBM "x_ct1_ntt"
-            asm_code << hpu::dstore("x_ct1_ntt", "x_offset", final_slot, 0);
+            asm_code << hpu::dstore("x_ct1_ntt", "x_offset", SLOT_A, 1);
         }
 
         asm_code << "        /* --- Step 3: Multiply and Accumulate with EVK --- */\n";
@@ -112,7 +106,7 @@ std::string generate_hpu_auto_body_asm(
                     asm_code << hpu::pmac(SLOT_C, SLOT_A, SLOT_B); // MAC 累加
                 }
                 // 立即将累加结果写回 HBM，释放 SRAM！
-                asm_code << hpu::dstore("x_out", "x_offset", SLOT_C, 0);
+                asm_code << hpu::dstore("x_out", "x_offset", SLOT_C, 1);
             }
         }
     }
@@ -126,8 +120,8 @@ std::string generate_hpu_auto_body_asm(
 			// 加载twiddle
 			asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
             // 正常 iNTT 退出频域 (auto_idx = 0)
-            asm_code << generate_hpu_intt_body_asm(N, SLOT_A, SLOT_B, POBJ_MOD_CTX, TWIDDLE, false);
-            asm_code << hpu::dstore("x_out", "x_offset", SLOT_B, 0);
+            asm_code << generate_hpu_intt_body_asm(N, SLOT_A, TWIDDLE, POBJ_MOD_CTX, false);
+            asm_code << hpu::dstore("x_out", "x_offset", SLOT_A, 1);
         }
     }
 
@@ -149,7 +143,7 @@ std::string generate_hpu_auto_body_asm(
         asm_code << hpu::padd(SLOT_C, SLOT_A, SLOT_B);
         
         // 最终合规的新密文 $c_0'$ 写回主存
-        asm_code << hpu::dstore("x_out", "x_offset", SLOT_C, 0);
+        asm_code << hpu::dstore("x_out", "x_offset", SLOT_C, 1);
     }
 
     if (append_psync) asm_code << hpu::psync(0);

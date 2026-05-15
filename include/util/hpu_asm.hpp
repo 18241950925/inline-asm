@@ -87,15 +87,16 @@ inline std::string pmaci(int pdst, int psrc1, int cimm8) {
 }
 
 // --- STG 格式：stage / transform 执行类 ---
-inline std::string pntt(int pdst, int psrc, int stage, int idx1, int mode = 0) {
+// 语义：第一个对象为原地数据对象，第二个对象为 twiddle 对象
+inline std::string pntt(int pdata, int ptwiddle, int stage, int idx1, int mode = 0) {
     std::ostringstream ss;
-    ss << "        \"pntt " << pobj(pdst) << ", " << pobj(psrc) << ", " << stage << ", " << idx1 << ", " << mode << " \\n\\t\"\n";
+    ss << "        \"pntt " << pobj(pdata) << ", " << pobj(ptwiddle) << ", " << stage << ", " << idx1 << ", " << mode << " \\n\\t\"\n";
     return ss.str();
 }
 
-inline std::string pintt(int pdst, int psrc, int stage, int idx1, int mode = 0) {
+inline std::string pintt(int pdata, int ptwiddle, int stage, int idx1, int mode = 0) {
     std::ostringstream ss;
-    ss << "        \"pintt " << pobj(pdst) << ", " << pobj(psrc) << ", " << stage << ", " << idx1 << ", " << mode << " \\n\\t\"\n";
+    ss << "        \"pintt " << pobj(pdata) << ", " << pobj(ptwiddle) << ", " << stage << ", " << idx1 << ", " << mode << " \\n\\t\"\n";
     return ss.str();
 }
 

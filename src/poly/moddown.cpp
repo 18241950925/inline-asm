@@ -5,7 +5,7 @@
 
 #include <sstream>
 #include <string>
-
+// coff domain
 std::string generate_hpu_moddown_body_asm(
     int num_q,
     int num_p,
@@ -41,7 +41,7 @@ std::string generate_hpu_moddown_body_asm(
         asm_code << hpu::psub(POBJ_Q, POBJ_Q, POBJ_CORR);
         asm_code << hpu::pmul(POBJ_Q, POBJ_Q, POBJ_P_INV);
         
-        asm_code << hpu::dstore("x0", "x0", POBJ_Q, 0);
+        asm_code << hpu::dstore("x0", "x0", POBJ_Q, 1);
     }
 
     if (append_psync) {

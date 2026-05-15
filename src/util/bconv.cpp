@@ -34,14 +34,14 @@ std::string generate_hpu_bconv_body_asm(
         // 使用 pmodld 的第二个参数作为识别 id 从对象中读取不同的模上下文
         asm_code << hpu::pmodld(POBJ_MOD_CTX, actual_q_idx);
 
-        asm_code << "        // dload q_j and qhat_inv_j (placeholder)\n";
+        asm_code << "        // dload a_j and qhat_inv_j (placeholder)\n";
         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
         asm_code << hpu::dload("x0", "x0", POBJ_TMP_B, hpu::DataType::poly);
 
         asm_code << hpu::pmul(POBJ_TMP_A, POBJ_TMP_A, POBJ_TMP_B);
 
         asm_code << "        // dstore x_j to tmp memory (placeholder)\n";
-        asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
+        asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 1);
     }
 
     // ==========================================
@@ -69,7 +69,7 @@ std::string generate_hpu_bconv_body_asm(
         }
         
         asm_code << "        // dstore Acc_i to target memory (placeholder)\n";
-        asm_code << hpu::dstore("x0", "x0", POBJ_ACC, 0);
+        asm_code << hpu::dstore("x0", "x0", POBJ_ACC, 1);
     }
 
     if (append_psync) {

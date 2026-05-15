@@ -1,7 +1,6 @@
 #include "util/ntt.hpp"
 #include "util/hpu_asm.hpp"
 
-#include <algorithm>
 #include <cmath>
 #include <sstream>
 #include <string>
@@ -17,10 +16,9 @@ bool is_power_of_two(int x)
 
 std::string generate_hpu_ntt_body_asm(
     int N,
-    int obj_poly_a,
-    int obj_poly_b,
-    int mod_ctx_obj,
+    int obj_poly,
     int twiddle_obj,
+    int mod_ctx_obj,
     bool append_psync)
 {
     std::ostringstream asm_code;
@@ -34,41 +32,33 @@ std::string generate_hpu_ntt_body_asm(
 
     const int logN = static_cast<int>(std::log2(static_cast<double>(N)));
 
-    int src_obj = obj_poly_a;
-    int dst_obj = obj_poly_b;
+    int data_obj = obj_poly;
 
     asm_code << "        // dload all mod contexts (placeholder)\n";
     // 假设调用方已经加载过密文模数
-    // 新版 NTT：软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
+    // 新版 NTT：原地操作，obj_poly 为数据对象，twiddle_obj 为 twiddle 对象
+    // 软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
     for (int stage = 0; stage < logN; ++stage) {
         asm_code << "\n        // ==========================================\n";
         asm_code << "        // Stage " << stage << " (Stage-level pntt)\n";
         asm_code << "        // ==========================================\n";
         asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
-        asm_code << hpu::pntt(dst_obj, src_obj, stage, 0);
-        std::swap(src_obj, dst_obj);
-    }
-
-    if (src_obj != obj_poly_b) {
-        asm_code << "\n        // Ensure final result in dst obj\n";
-        asm_code << hpu::pmuli(obj_poly_b, src_obj, 1);
-        src_obj = obj_poly_b;
+        asm_code << hpu::pntt(data_obj, twiddle_obj, stage, 0);
     }
 
     if (append_psync) {
         asm_code << hpu::psync(0);
     }
 
-    asm_code << "\n        // Final result object slot: " << hpu::pobj(src_obj) << "\n";
+    asm_code << "\n        // Final result object slot: " << hpu::pobj(data_obj) << "\n";
     return asm_code.str();
 }
 
 std::string generate_hpu_intt_body_asm(
     int N,
-    int obj_poly_a,
-    int obj_poly_b,
-    int mod_ctx_obj,
+    int obj_poly,
     int twiddle_obj,
+    int mod_ctx_obj,
     bool append_psync)
 {
     std::ostringstream asm_code;
@@ -82,42 +72,34 @@ std::string generate_hpu_intt_body_asm(
 
     const int logN = static_cast<int>(std::log2(static_cast<double>(N)));
 
-    int src_obj = obj_poly_a;
-    int dst_obj = obj_poly_b;
+    int data_obj = obj_poly;
 
     asm_code << "        // dload all mod contexts (placeholder)\n";
     // 假设调用方已经加载过密文模数
 
-    // 新版 INTT：软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
+    // 新版 INTT：原地操作，obj_poly 为数据对象，twiddle_obj 为 twiddle 对象
+    // 软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
     for (int stage = 0; stage < logN; ++stage) {
         asm_code << "\n        // ==========================================\n";
         asm_code << "        // Stage " << stage << " (Stage-level pintt)\n";
         asm_code << "        // ==========================================\n";
         asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
-        asm_code << hpu::pintt(dst_obj, src_obj, stage, 0);
-        std::swap(src_obj, dst_obj);
-    }
-
-    if (src_obj != obj_poly_b) {
-        asm_code << "\n        // Ensure final result in dst obj\n";
-        asm_code << hpu::pmuli(obj_poly_b, src_obj, 1);
-        src_obj = obj_poly_b;
+        asm_code << hpu::pintt(data_obj, twiddle_obj, stage, 0);
     }
 
     if (append_psync) {
         asm_code << hpu::psync(0);
     }
 
-    asm_code << "\n        // Final result object slot: " << hpu::pobj(src_obj) << "\n";
+    asm_code << "\n        // Final result object slot: " << hpu::pobj(data_obj) << "\n";
     return asm_code.str();
 }
 
 std::string generate_hpu_ntt_asm(
     int N,
-    int obj_poly_a,
-    int obj_poly_b,
-    int mod_ctx_obj,
+    int obj_poly,
     int twiddle_obj,
+    int mod_ctx_obj,
     bool append_psync)
 {
     std::ostringstream asm_code;
@@ -133,10 +115,9 @@ std::string generate_hpu_ntt_asm(
     asm_code << "    __asm__ volatile(\n";
     asm_code << generate_hpu_ntt_body_asm(
         N,
-        obj_poly_a,
-        obj_poly_b,
-        mod_ctx_obj,
+        obj_poly,
         twiddle_obj,
+        mod_ctx_obj,
         append_psync);
     asm_code << "\n        // 结束\n";
     asm_code << "        : \n";
@@ -150,10 +131,9 @@ std::string generate_hpu_ntt_asm(
 
 std::string generate_hpu_intt_asm(
     int N,
-    int obj_poly_a,
-    int obj_poly_b,
-    int mod_ctx_obj,
+    int obj_poly,
     int twiddle_obj,
+    int mod_ctx_obj,
     bool append_psync)
 {
     std::ostringstream asm_code;
@@ -169,10 +149,9 @@ std::string generate_hpu_intt_asm(
     asm_code << "    __asm__ volatile(\n";
     asm_code << generate_hpu_intt_body_asm(
         N,
-        obj_poly_a,
-        obj_poly_b,
-        mod_ctx_obj,
+        obj_poly,
         twiddle_obj,
+        mod_ctx_obj,
         append_psync);
     asm_code << "\n        // 结束\n";
     asm_code << "        : \n";

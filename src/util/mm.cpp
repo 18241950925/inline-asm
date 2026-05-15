@@ -25,7 +25,7 @@ std::string generate_hpu_mm_asm(
     asm_code << "void hpu_mm_complete(void) {\n";
 
     asm_code << "    __asm__ volatile(\n";
-    asm_code << hpu::pmodld(mod_ctx_obj);
+    asm_code << hpu::pmodld(mod_ctx_obj,0);
     asm_code << generate_hpu_mm_body_asm(obj_a, obj_b, obj_c);
 
     if (append_psync) {
