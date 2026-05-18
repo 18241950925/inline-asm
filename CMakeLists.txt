@@ -7,6 +7,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+add_subdirectory(encode)
+
 add_executable(inline_asm_codegen
         src/main.cpp
         src/util/ntt.cpp
@@ -24,3 +26,5 @@ target_include_directories(inline_asm_codegen
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+
+add_subdirectory(test/encode)

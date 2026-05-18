@@ -1,10 +1,10 @@
 # HPU Inline Assembly Codegen
 
-本项目用于为全同态加密在自研 HPU（Homomorphic Processing Unit）硬件上，提供 C++ 内联汇编（Inline Assembly）的生成器。项目基于 HPU 的 3-bit 寻址槽位和流水线执行语义进行抽象，支持从底层通用计算直至高层复杂 FHE 算子的自动代码生成。
+本项目用于为全同态加密在自研 HPU（Homomorphic Processing Unit）硬件上，提供 C++ 内联汇编（Inline Assembly）的生成器。项目基于 HPU 的 3-bit 寻址槽位和流水线执行语义进行抽象，支持从底层通用计算直至高层复杂 FHE 算子的自动代码生成，并可将生成后的 ASM 继续转译为 32 位指令编码文本。
 
 ## 1. 项目结构
 
-代码按照功能依赖分层，并分别维护在 `include` 及 `src` 目录下，包含三大类模块：
+代码按照功能依赖分层，并分别维护在 `include` 及 `src` 目录下，包含三大类生成模块，以及独立的编码与测试辅助模块：
 
 ### 1) 基础工具层 (`util`)
 - **`util/hpu_asm.hpp/cpp`**：基础 HPU 汇编助记符封装和生成接口，遵循《HPU_INSTRUCTION_MANUAL.md》。
@@ -22,6 +22,17 @@
 ### 3) 高级算子层 (`operator`)
 拼装多项式级与基础工具算子，完整实现核心同态运算：
 - **`operator/keyswitch.hpp/cpp`**：完整密钥切换 (KeySwitch) 逻辑生成，包含切片循环（密文分解，由参数 `dnum` 控制）、ModUp、多基 NTT、与 Evk (评估密钥) 点乘累加、INTT、以及 ModDown 缩放累加操作的全工作流流水线。
+
+### 4) 指令编码模块 (`encode`)
+将生成出的 HPU 汇编进一步转译为 32 位机器码文本：
+- **`encode/include/*.hpp`**：定义指令数据结构、解析、编码及组装接口。
+- **`encode/src/*.cpp`**：实现 ASM / C++ 内联汇编解析、格式归一化以及 `custom0` / `custom1` 指令编码。
+- **`hpu_encode`**：由 `encode/CMakeLists.txt` 生成的静态库，供后续测试或上层流程复用。
+
+### 5) 编码测试辅助模块 (`test/encode`)
+用于把主生成流程输出的 ASM 继续转换为 `.inst32` 文件：
+- **`test/encode/main.cpp`**：读取主流程生成的 `output/<case>.cpp` 与 `output/<case>.asm`，归档到 `outputs/<case>/`，再调用 `hpu_encode` 生成对应的 32 位二进制文本。
+- **`inline_asm_encode_outputs`**：构建后生成的测试编码工具。
 
 ---
 
@@ -45,24 +56,51 @@ cmake --build . -j
 ./build/inline_asm_codegen both
 ```
 
+若需要继续将可编码的 ASM 转成 32 位指令文本，可在生成 ASM 后执行：
 
-运行时程序会在运行级所在目录自动创建 `output/` 文件夹，并将所有的生成的汇编函数保存在其中（对应的 CPP 头文件包含了可直接被 GCC 编译的 `__asm__ volatile()` 块）：
+```bash
+./build/test/encode/inline_asm_encode_outputs
+```
+
+主生成程序仍保持主分支的输出方式，先在根目录生成扁平的 `output/` 文件夹；编码辅助工具随后会把 `.cpp` 与 `.asm` 归档到 `outputs/<case>/`，并将可直接编码的结果写回同一目录。仍含符号寄存器占位符的文件会被显式跳过。
+
+执行 `inline_asm_codegen` 后会先得到主分支约定的扁平输出：
 - `output/ntt.cpp`
+- `output/ntt.asm`
 - `output/intt.cpp`
-- `output/mm.cpp`
-- `output/bconv.cpp`
-- `output/pmult.cpp`
-- `output/cmult.cpp`
-- `output/modup.cpp`
-- `output/moddown.cpp`
-- `output/auto.cpp`
-- `output/keyswitch.cpp`
+- `output/intt.asm`
+- `...`
+
+执行 `inline_asm_encode_outputs` 后，会进一步整理出根目录下的 `outputs/` 文件夹。每个算子拥有独立子目录，目录中可同时存放对应的 C++ 内联汇编、ASM、二进制编码以及测试数据占位目录：
+- `outputs/ntt/`
+- `outputs/intt/`
+- `outputs/mm/`
+- `outputs/bconv/`
+- `outputs/pmult/`
+- `outputs/cmult/`
+- `outputs/modup/`
+- `outputs/moddown/`
+- `outputs/auto/`
+- `outputs/keyswitch/`
+
+例如 `outputs/ntt/` 下会包含：
+- `ntt.cpp`
+- `ntt.asm`
+- `ntt.inst32`（运行编码工具后生成）
+- `test_data/`
 
 ---
 
 ## 3. 当前示例参数（main.cpp）
 
 入口文件 `src/main.cpp` 对所有操作函数进行了组合测试。
+
+当前示例生成流程由两阶段组成：
+
+1. `inline_asm_codegen` 按主分支约定先在 `output/` 下生成 `.cpp` 与 `.asm`。
+2. `inline_asm_encode_outputs` 负责将它们归档到 `outputs/<case>/`，并把可直接编码的 `.asm` 继续转译为 `.inst32`。
+
+各算子的静态测试数据尚未在主流程中自动生成，当前仅在 `outputs/<case>/test_data/` 中预留目录位置。
 
 
 ## 4. 关键设计实现说明
@@ -76,6 +114,12 @@ cmake --build . -j
 - **流水线的统一复用：**
   复杂的算子（如 `keyswitch`）不需要从头生成具体的 `hpu::pmul` 等语句。全部由底层统一拆解后的 `generate_hpu_*_body_asm` (Body Generator) 函数段拼接而成，避免了多次复制 DMA 及状态上下文切分代码。
 
+- **生成与编码分层解耦：**
+  `inline-asm` 仍负责汇编生成，`encode` 模块则负责解析、归一化和 32 位编码。两者保留独立边界，但通过同一 CMake 工程统一构建，从而降低汇编语义更新后生成器与编码器失配的风险。
+
+- **双输入形式兼容：**
+  编码器既可处理纯 ASM body，也可处理带有 `__asm__ volatile(...)` 包装的 C++ 内联汇编文本。对于 `void hpu_xxx(void) {`、`: "memory"`、`);` 等生成边界，解析器会做定向忽略；但非法汇编指令本身仍会被保留为错误。
+
 
 ---
 
@@ -88,6 +132,9 @@ cmake --build . -j
 - 复杂算子（PMULT/CMULT/MODUP/MODDOWN）使用 `dload/dstore` 流式搬运，不在本地长期保留多基对象
 - `pmodld`/`pshcfg` 对应对象槽位已通过 `dload` 准备好模上下文与 shuffle 配置
 - 需要阶段收敛时使用 `psync`
+- 当前 `.inst32` 输出仅覆盖可直接完成寄存器解析的 ASM；`auto` 仍含 `x_c0`、`x_offset`、`x_out` 等符号寄存器占位符，需在完成物理寄存器分配后再编码
+- 当前 `cmult` 仅生成 `.cpp` 包装文件，body ASM 输出仍处于注释状态，因此还未进入统一 `.inst32` 生成链路
+- `outputs/<case>/test_data/` 目前仅为目录占位，测试数据内容和格式仍需按后续联调约定补充
 
 ---
 
