@@ -136,22 +136,22 @@ std::string generate_hpu_cmult_asm(
 
 //         // Convert a0
 //         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
-//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, POBJ_MOD_CTX, false);
+//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
 //         asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
 
 //         // Convert a1
 //         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
-//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, POBJ_MOD_CTX, false);
+//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
 //         asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
 
 //         // Convert b0
 //         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
-//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, POBJ_MOD_CTX, false);
+//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
 //         asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
 
 //         // Convert b1
 //         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
-//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, POBJ_MOD_CTX, false);
+//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
 //         asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
 
 //         // Now compute out0 = a0*b0

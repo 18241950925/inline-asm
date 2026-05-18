@@ -53,7 +53,7 @@ std::string generate_hpu_keyswitch_body_asm(
             asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
             asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
             asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
-            asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, POBJ_MOD_CTX, false);
+            asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
             asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 1);
         }
 
@@ -95,7 +95,7 @@ std::string generate_hpu_keyswitch_body_asm(
             asm_code << hpu::pmodld(POBJ_MOD_CTX2, i);
             asm_code << hpu::dload("x0", "x0", POBJ_TMP_A2, hpu::DataType::poly);
             asm_code << hpu::dload("x0", "x0", TWIDDLE2, hpu::DataType::poly);
-            asm_code << generate_hpu_intt_body_asm(N, POBJ_TMP_A2, TWIDDLE2, POBJ_MOD_CTX2, false);
+            asm_code << generate_hpu_intt_body_asm(N, POBJ_TMP_A2, TWIDDLE2, false);
             asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A2, 1);
         }
     }

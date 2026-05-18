@@ -116,8 +116,7 @@ void test_intt_codegen() {
 		std::string intt_body = generate_hpu_intt_body_asm(
 		kNttCfg.N,
 		kNttCfg.obj_poly,
-		kNttCfg.twiddle_obj,
-		kNttCfg.mod_ctx_obj);
+		kNttCfg.twiddle_obj);
 	std::ofstream("output/intt.asm") << intt_body;
 	std::cout << "Saved intt body ASM to output/intt.asm\n";
 	}
@@ -139,8 +138,7 @@ void test_ntt_codegen()
 		std::string ntt_body = generate_hpu_ntt_body_asm(
 		kNttCfg.N,
 		kNttCfg.obj_poly,
-		kNttCfg.twiddle_obj,
-		kNttCfg.mod_ctx_obj);
+		kNttCfg.twiddle_obj);
 	std::ofstream("output/ntt.asm") << ntt_body;
 	std::cout << "Saved ntt body ASM to output/ntt.asm\n";
 	}

@@ -119,7 +119,7 @@ std::string generate_hpu_pmult_asm(
 //         asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
 //         // Pre-NTT PT
 //         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
-//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_SHF, POBJ_MOD_CTX, false);
+//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_SHF, false);
 //         int pt_ntt_slot = POBJ_TMP_A;
 //         // Move to POBJ_PT_NTT if it's not already there
 //         if (pt_ntt_slot != POBJ_PT_NTT) {
@@ -130,14 +130,14 @@ std::string generate_hpu_pmult_asm(
 
 //         // Pre-NTT CT0
 //         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
-//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_SHF, POBJ_MOD_CTX, false);
+//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_SHF, false);
 //         int ct0_ntt_slot = POBJ_TMP_A;
 //         asm_code << generate_hpu_mm_body_asm(POBJ_TMP_A, ct0_ntt_slot, POBJ_PT_NTT);
 //         asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
 
 //         // Pre-NTT CT1
 //         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
-//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_SHF, POBJ_MOD_CTX, false);
+//         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_SHF, false);
 //         int ct1_ntt_slot = POBJ_TMP_A;
 //         asm_code << generate_hpu_mm_body_asm(POBJ_TMP_A, ct1_ntt_slot, POBJ_PT_NTT);
 //         asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);

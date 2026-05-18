@@ -18,12 +18,9 @@ std::string generate_hpu_ntt_body_asm(
     int N,
     int obj_poly,
     int twiddle_obj,
-    int mod_ctx_obj,
     bool append_psync)
 {
     std::ostringstream asm_code;
-
-    (void)mod_ctx_obj; // placeholder: caller handles pmodld
 
     if (!is_power_of_two(N)) {
         asm_code << "        // Invalid config: require power-of-two N\n";
@@ -58,12 +55,9 @@ std::string generate_hpu_intt_body_asm(
     int N,
     int obj_poly,
     int twiddle_obj,
-    int mod_ctx_obj,
     bool append_psync)
 {
     std::ostringstream asm_code;
-
-    (void)mod_ctx_obj; // placeholder: caller handles pmodld
 
     if (!is_power_of_two(N)) {
         asm_code << "        // Invalid config: require power-of-two N\n";
@@ -113,11 +107,12 @@ std::string generate_hpu_ntt_asm(
     }
 
     asm_code << "    __asm__ volatile(\n";
+    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx);
+    asm_code << hpu::pmodld(mod_ctx_obj, 0);
     asm_code << generate_hpu_ntt_body_asm(
         N,
         obj_poly,
         twiddle_obj,
-        mod_ctx_obj,
         append_psync);
     asm_code << "\n        // 结束\n";
     asm_code << "        : \n";
@@ -147,11 +142,12 @@ std::string generate_hpu_intt_asm(
     }
 
     asm_code << "    __asm__ volatile(\n";
+    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx);
+    asm_code << hpu::pmodld(mod_ctx_obj, 0);
     asm_code << generate_hpu_intt_body_asm(
         N,
         obj_poly,
         twiddle_obj,
-        mod_ctx_obj,
         append_psync);
     asm_code << "\n        // 结束\n";
     asm_code << "        : \n";

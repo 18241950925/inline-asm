@@ -57,11 +57,11 @@ std::string generate_hpu_auto_body_asm(
 		// 加载twiddle
 		asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
         // NTT 转入频域
-        asm_code << generate_hpu_ntt_body_asm(N, SLOT_A, TWIDDLE, POBJ_MOD_CTX, false);
+        asm_code << generate_hpu_ntt_body_asm(N, SLOT_A, TWIDDLE, false);
         // 加载融合版twiddle
 		asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
         // iNTT 融合旋转因子 (完成移位并退出频域)
-        asm_code << generate_hpu_intt_body_asm(N, SLOT_A, TWIDDLE, POBJ_MOD_CTX, false);
+        asm_code << generate_hpu_intt_body_asm(N, SLOT_A, TWIDDLE, false);
         // 将旋转后的 c0 暂存回 HBM (开辟一块临时内存 "x_tmp_c0")
         asm_code << hpu::dstore("x_tmp_c0", "x_offset", SLOT_A, 1); 
     }
@@ -84,7 +84,7 @@ std::string generate_hpu_auto_body_asm(
 			// 加载twiddle
 			asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
             // 执行融合了 auto_idx 的 NTT
-            asm_code << generate_hpu_ntt_body_asm(N, SLOT_A, TWIDDLE, POBJ_MOD_CTX, false);
+            asm_code << generate_hpu_ntt_body_asm(N, SLOT_A, TWIDDLE, false);
             // 将处于求值域(且已位移)的碎片写回 HBM "x_ct1_ntt"
             asm_code << hpu::dstore("x_ct1_ntt", "x_offset", SLOT_A, 1);
         }
@@ -120,7 +120,7 @@ std::string generate_hpu_auto_body_asm(
 			// 加载twiddle
 			asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
             // 正常 iNTT 退出频域 (auto_idx = 0)
-            asm_code << generate_hpu_intt_body_asm(N, SLOT_A, TWIDDLE, POBJ_MOD_CTX, false);
+            asm_code << generate_hpu_intt_body_asm(N, SLOT_A, TWIDDLE, false);
             asm_code << hpu::dstore("x_out", "x_offset", SLOT_A, 1);
         }
     }
