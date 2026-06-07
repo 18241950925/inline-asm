@@ -92,7 +92,7 @@ struct AutoConfig {
 	int auto_idx;
 };
 
-constexpr NttConfig kNttCfg{64, 0, 1, 2};
+constexpr NttConfig kNttCfg{8, 0, 1, 2};
 constexpr MmConfig kMmCfg{0, 1, 2, 3};
 // 为了演示 3-bit 槽位约束，示例采用 num_q = num_p = 1
 constexpr BconvConfig kBconvCfg{1, 1, 0, 1, 2, 3, 4, 5, 6};
@@ -113,10 +113,11 @@ void test_intt_codegen() {
 	}
 
 	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
-		std::string intt_body = generate_hpu_intt_body_asm(
+		std::string intt_body = generate_hpu_intt_body_asm_with_mod_ctx(
 		kNttCfg.N,
 		kNttCfg.obj_poly,
-		kNttCfg.twiddle_obj);
+		kNttCfg.twiddle_obj,
+		kNttCfg.mod_ctx_obj);
 	std::ofstream("output/intt.asm") << intt_body;
 	std::cout << "Saved intt body ASM to output/intt.asm\n";
 	}
@@ -135,10 +136,11 @@ void test_ntt_codegen()
 	}
 
 	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
-		std::string ntt_body = generate_hpu_ntt_body_asm(
+		std::string ntt_body = generate_hpu_ntt_body_asm_with_mod_ctx(
 		kNttCfg.N,
 		kNttCfg.obj_poly,
-		kNttCfg.twiddle_obj);
+		kNttCfg.twiddle_obj,
+		kNttCfg.mod_ctx_obj);
 	std::ofstream("output/ntt.asm") << ntt_body;
 	std::cout << "Saved ntt body ASM to output/ntt.asm\n";
 	}

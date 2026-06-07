@@ -7,6 +7,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if (MSVC)
+        add_compile_options(/utf-8)
+endif()
+
 add_subdirectory(encode)
 
 add_executable(inline_asm_codegen
@@ -28,3 +32,4 @@ target_include_directories(inline_asm_codegen
 )
 
 add_subdirectory(test/encode)
+add_subdirectory(test/N16)

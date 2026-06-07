@@ -31,8 +31,7 @@ std::string generate_hpu_ntt_body_asm(
 
     int data_obj = obj_poly;
 
-    asm_code << "        // dload all mod contexts (placeholder)\n";
-    // 假设调用方已经加载过密文模数
+    asm_code << "        // Active mod context must be loaded before pntt stages\n";
     // 新版 NTT：原地操作，obj_poly 为数据对象，twiddle_obj 为 twiddle 对象
     // 软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
     for (int stage = 0; stage < logN; ++stage) {
@@ -48,6 +47,34 @@ std::string generate_hpu_ntt_body_asm(
     }
 
     asm_code << "\n        // Final result object slot: " << hpu::pobj(data_obj) << "\n";
+    return asm_code.str();
+}
+
+std::string generate_hpu_ntt_body_asm_with_mod_ctx(
+    int N,
+    int obj_poly,
+    int twiddle_obj,
+    int mod_ctx_obj,
+    int mod_ctx_idx,
+    bool append_psync)
+{
+    std::ostringstream asm_code;
+
+    if (!is_power_of_two(N)) {
+        asm_code << "        // Invalid config: require power-of-two N\n";
+        return asm_code.str();
+    }
+
+    asm_code << "        // Load input poly for standalone NTT test\n";
+    asm_code << hpu::dload("x0", "x0", obj_poly, hpu::DataType::poly);
+    asm_code << "        // Load mod context for standalone NTT test\n";
+    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx);
+    asm_code << hpu::pmodld(mod_ctx_obj, mod_ctx_idx);
+    asm_code << generate_hpu_ntt_body_asm(
+        N,
+        obj_poly,
+        twiddle_obj,
+        append_psync);
     return asm_code.str();
 }
 
@@ -68,8 +95,7 @@ std::string generate_hpu_intt_body_asm(
 
     int data_obj = obj_poly;
 
-    asm_code << "        // dload all mod contexts (placeholder)\n";
-    // 假设调用方已经加载过密文模数
+    asm_code << "        // Active mod context must be loaded before pintt stages\n";
 
     // 新版 INTT：原地操作，obj_poly 为数据对象，twiddle_obj 为 twiddle 对象
     // 软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
@@ -86,6 +112,34 @@ std::string generate_hpu_intt_body_asm(
     }
 
     asm_code << "\n        // Final result object slot: " << hpu::pobj(data_obj) << "\n";
+    return asm_code.str();
+}
+
+std::string generate_hpu_intt_body_asm_with_mod_ctx(
+    int N,
+    int obj_poly,
+    int twiddle_obj,
+    int mod_ctx_obj,
+    int mod_ctx_idx,
+    bool append_psync)
+{
+    std::ostringstream asm_code;
+
+    if (!is_power_of_two(N)) {
+        asm_code << "        // Invalid config: require power-of-two N\n";
+        return asm_code.str();
+    }
+
+    asm_code << "        // Load input poly for standalone INTT test\n";
+    asm_code << hpu::dload("x0", "x0", obj_poly, hpu::DataType::poly);
+    asm_code << "        // Load mod context for standalone INTT test\n";
+    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx);
+    asm_code << hpu::pmodld(mod_ctx_obj, mod_ctx_idx);
+    asm_code << generate_hpu_intt_body_asm(
+        N,
+        obj_poly,
+        twiddle_obj,
+        append_psync);
     return asm_code.str();
 }
 
@@ -107,16 +161,16 @@ std::string generate_hpu_ntt_asm(
     }
 
     asm_code << "    __asm__ volatile(\n";
-    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx);
-    asm_code << hpu::pmodld(mod_ctx_obj, 0);
-    asm_code << generate_hpu_ntt_body_asm(
+    asm_code << generate_hpu_ntt_body_asm_with_mod_ctx(
         N,
         obj_poly,
         twiddle_obj,
+        mod_ctx_obj,
+        0,
         append_psync);
     asm_code << "\n        // 结束\n";
-    asm_code << "        : \n";
-    asm_code << "        : \n";
+    asm_code << "        :\n";
+    asm_code << "        :\n";
     asm_code << "        : \"memory\"\n";
     asm_code << "    );\n";
     asm_code << "}\n";
@@ -142,16 +196,16 @@ std::string generate_hpu_intt_asm(
     }
 
     asm_code << "    __asm__ volatile(\n";
-    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx);
-    asm_code << hpu::pmodld(mod_ctx_obj, 0);
-    asm_code << generate_hpu_intt_body_asm(
+    asm_code << generate_hpu_intt_body_asm_with_mod_ctx(
         N,
         obj_poly,
         twiddle_obj,
+        mod_ctx_obj,
+        0,
         append_psync);
     asm_code << "\n        // 结束\n";
-    asm_code << "        : \n";
-    asm_code << "        : \n";
+    asm_code << "        :\n";
+    asm_code << "        :\n";
     asm_code << "        : \"memory\"\n";
     asm_code << "    );\n";
     asm_code << "}\n";

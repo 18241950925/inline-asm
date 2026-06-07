@@ -32,8 +32,8 @@ std::string generate_hpu_mm_asm(
         asm_code << hpu::psync(0);
     }
 
-    asm_code << "        : \n";
-    asm_code << "        : \n";
+    asm_code << "        :\n";
+    asm_code << "        :\n";
     asm_code << "        : \"memory\"\n";
     asm_code << "    );\n";
     asm_code << "}\n";

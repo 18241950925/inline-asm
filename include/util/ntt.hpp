@@ -8,10 +8,26 @@ std::string generate_hpu_ntt_body_asm(
         int twiddle_obj,
         bool append_psync = false);
 
+std::string generate_hpu_ntt_body_asm_with_mod_ctx(
+        int N,
+        int obj_poly,
+        int twiddle_obj,
+        int mod_ctx_obj,
+        int mod_ctx_idx = 0,
+        bool append_psync = false);
+
 std::string generate_hpu_intt_body_asm(
         int N,
         int obj_poly,
         int twiddle_obj,
+        bool append_psync = false);
+
+std::string generate_hpu_intt_body_asm_with_mod_ctx(
+        int N,
+        int obj_poly,
+        int twiddle_obj,
+        int mod_ctx_obj,
+        int mod_ctx_idx = 0,
         bool append_psync = false);
 
 std::string generate_hpu_ntt_asm(

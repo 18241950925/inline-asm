@@ -100,7 +100,7 @@ cmake --build . -j
 1. `inline_asm_codegen` 按主分支约定先在 `output/` 下生成 `.cpp` 与 `.asm`。
 2. `inline_asm_encode_outputs` 负责将它们归档到 `outputs/<case>/`，并把可直接编码的 `.asm` 继续转译为 `.inst32`。
 
-各算子的静态测试数据尚未在主流程中自动生成，当前仅在 `outputs/<case>/test_data/` 中预留目录位置。
+当前先为`outputs/ntt/test_data/`自动生成N=8的小规模NTT测试数据，其余算子目录仍保留`test_data/`占位。
 
 
 ## 4. 关键设计实现说明
@@ -134,7 +134,7 @@ cmake --build . -j
 - 需要阶段收敛时使用 `psync`
 - 当前 `.inst32` 输出仅覆盖可直接完成寄存器解析的 ASM；`auto` 仍含 `x_c0`、`x_offset`、`x_out` 等符号寄存器占位符，需在完成物理寄存器分配后再编码
 - 当前 `cmult` 仅生成 `.cpp` 包装文件，body ASM 输出仍处于注释状态，因此还未进入统一 `.inst32` 生成链路
-- `outputs/<case>/test_data/` 目前仅为目录占位，测试数据内容和格式仍需按后续联调约定补充
+- `outputs/ntt/test_data/`已包含N=8的小规模NTT输入、twiddle、模上下文、期望输出和独立指令；其余算子的测试数据仍需按后续联调约定补充
 
 ---
 
