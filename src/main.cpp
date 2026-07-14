@@ -12,6 +12,7 @@
 #include "poly/modup.hpp"
 #include "poly/pmult.hpp"
 #include "operator/keyswitch.hpp"
+#include "operator/ciphertext_multiply.hpp"
 
 namespace {
 
@@ -92,6 +93,13 @@ struct AutoConfig {
 	int auto_idx;
 };
 
+struct CiphertextMultiplyConfig {
+	int N;
+	int num_q;
+	int num_p;
+	int dnum;
+};
+
 constexpr NttConfig kNttCfg{64, 0, 1, 2};
 constexpr MmConfig kMmCfg{0, 1, 2, 3};
 // 为了演示 3-bit 槽位约束，示例采用 num_q = num_p = 1
@@ -100,6 +108,7 @@ constexpr PmultConfig kPmultCfg{1, 0, 1, 2, 3, 4, 5};
 constexpr CmultConfig kCmultCfg{1, 0, 1, 2, 3, 4, 5, 6, 7};
 constexpr ModdownConfig kModdownCfg{1, 1, 0, 1, 2, 3, 4, 5, 6, 7};
 constexpr AutoConfig kAutoCfg{4096, 4, 3, 2, 1};
+constexpr CiphertextMultiplyConfig kCiphertextMultiplyCfg{4096, 4, 3, 2};
 
 void test_intt_codegen() {
 	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
@@ -214,13 +223,13 @@ void test_cmult_codegen()
 	std::cout << "Saved cmult ASM to output/cmult.cpp\n";
 	}
 
-	// if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
-	// 	std::string cmult_body = generate_hpu_cmult_body_asm(
-	// 	kCmultCfg.num_q,
-	// 	true);
-	// std::ofstream("output/cmult.asm") << cmult_body;
-	// std::cout << "Saved cmult body ASM to output/cmult.asm\n";
-	// }
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string cmult_body = generate_hpu_cmult_body_asm(
+		kCmultCfg.num_q,
+		true);
+	std::ofstream("output/cmult.asm") << cmult_body;
+	std::cout << "Saved cmult body ASM to output/cmult.asm\n";
+	}
 }
 
 void test_modup_codegen()
@@ -310,6 +319,31 @@ void test_keyswitch_codegen()
 	}
 }
 
+void test_ciphertext_multiply_codegen()
+{
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string ciphertext_multiply = generate_hpu_ciphertext_multiply_asm(
+		kCiphertextMultiplyCfg.N,
+		kCiphertextMultiplyCfg.num_q,
+		kCiphertextMultiplyCfg.num_p,
+		kCiphertextMultiplyCfg.dnum,
+		true);
+	std::ofstream("output/ciphertext_multiply.cpp") << ciphertext_multiply;
+	std::cout << "Saved ciphertext_multiply ASM to output/ciphertext_multiply.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string ciphertext_multiply_body = generate_hpu_ciphertext_multiply_body_asm(
+		kCiphertextMultiplyCfg.N,
+		kCiphertextMultiplyCfg.num_q,
+		kCiphertextMultiplyCfg.num_p,
+		kCiphertextMultiplyCfg.dnum,
+		true);
+	std::ofstream("output/ciphertext_multiply.asm") << ciphertext_multiply_body;
+	std::cout << "Saved ciphertext_multiply body ASM to output/ciphertext_multiply.asm\n";
+	}
+}
+
 } // namespace
 
 int main(int argc, char* argv[])
@@ -338,5 +372,6 @@ int main(int argc, char* argv[])
 	test_moddown_codegen();
 	test_auto_codegen();
 	test_keyswitch_codegen();
+	test_ciphertext_multiply_codegen();
 	return 0;
 }

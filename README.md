@@ -15,13 +15,14 @@
 ### 2) 多项式级操作层 (`poly`)
 调用并复用 `util` 层的基础算子，组合出同态相关的复杂多项式算子：
 - **`poly/pmult.hpp/cpp`**：明密文相乘 (Plaintext-Ciphertext Multiplication)。
-- **`poly/cmult.hpp/cpp`**：密文相乘 (Ciphertext-Ciphertext Multiplication)。
+- **`poly/cmult.hpp/cpp`**：密文乘法的张量积阶段，将二元密文 $(a_0,a_1)$ 与 $(b_0,b_1)$ 乘成三元中间结果 $(t_0,t_1,t_2)$。
 - **`poly/modup.hpp/cpp`**：模提升 (ModUp) 操作，负责将 $Q$ 基下的残差提升扩展到 $Q \cup P$。
 - **`poly/moddown.hpp/cpp`**：模回缩 (ModDown) 操作，负责将中间结果缩放回 $Q$ 基，纠正缩放因子。
 
 ### 3) 高级算子层 (`operator`)
 拼装多项式级与基础工具算子，完整实现核心同态运算：
 - **`operator/keyswitch.hpp/cpp`**：完整密钥切换 (KeySwitch) 逻辑生成，包含切片循环（密文分解，由参数 `dnum` 控制）、ModUp、多基 NTT、与 Evk (评估密钥) 点乘累加、INTT、以及 ModDown 缩放累加操作的全工作流流水线。
+- **`operator/ciphertext_multiply.hpp/cpp`**：完整密文乘法生成，执行输入分量 NTT、`cmult` 三分量张量积、INTT、对 $t_2$ 的重线性化/KeySwitch，以及最终 $(out_0,out_1)$ 合成。
 
 ### 4) 指令编码模块 (`encode`)
 将生成出的 HPU 汇编进一步转译为 32 位机器码文本：
@@ -33,6 +34,9 @@
 用于把主生成流程输出的 ASM 继续转换为 `.inst32` 文件：
 - **`test/encode/main.cpp`**：读取主流程生成的 `output/<case>.cpp` 与 `output/<case>.asm`，归档到 `outputs/<case>/`，再调用 `hpu_encode` 生成对应的 32 位二进制文本。
 - **`inline_asm_encode_outputs`**：构建后生成的测试编码工具。
+
+### 6) 后端约束文档 (`doc`)
+- **`doc/HPU_BACKEND_CONSTRAINT_SPEC.md`**：面向 LLVM/MLIR 风格后端对接的硬件信息需求清单，覆盖 target 描述、数据布局、DMA ABI、指令语义、调度约束、算子 contract 与测试向量要求。
 
 ---
 
@@ -82,6 +86,7 @@ cmake --build . -j
 - `outputs/moddown/`
 - `outputs/auto/`
 - `outputs/keyswitch/`
+- `outputs/ciphertext_multiply/`
 
 例如 `outputs/ntt/` 下会包含：
 - `ntt.cpp`
@@ -114,6 +119,9 @@ cmake --build . -j
 - **流水线的统一复用：**
   复杂的算子（如 `keyswitch`）不需要从头生成具体的 `hpu::pmul` 等语句。全部由底层统一拆解后的 `generate_hpu_*_body_asm` (Body Generator) 函数段拼接而成，避免了多次复制 DMA 及状态上下文切分代码。
 
+- **完整密文乘法语义：**
+  `cmult` 只负责 FHE 密文乘法中的张量积阶段，即 $t_0=a_0b_0$、$t_1=a_0b_1+a_1b_0$、$t_2=a_1b_1$。完整密文乘法由 `ciphertext_multiply` 负责：先将输入分量转换到 NTT 域做张量积，再回到系数域，对 $t_2$ 执行重线性化并合成标准二元密文 $(t_0+ks_0,\ t_1+ks_1)$。
+
 - **生成与编码分层解耦：**
   `inline-asm` 仍负责汇编生成，`encode` 模块则负责解析、归一化和 32 位编码。两者保留独立边界，但通过同一 CMake 工程统一构建，从而降低汇编语义更新后生成器与编码器失配的风险。
 
@@ -133,10 +141,10 @@ cmake --build . -j
 - `pmodld`/`pshcfg` 对应对象槽位已通过 `dload` 准备好模上下文与 shuffle 配置
 - 需要阶段收敛时使用 `psync`
 - 当前 `.inst32` 输出仅覆盖可直接完成寄存器解析的 ASM；`auto` 仍含 `x_c0`、`x_offset`、`x_out` 等符号寄存器占位符，需在完成物理寄存器分配后再编码
-- 当前 `cmult` 仅生成 `.cpp` 包装文件，body ASM 输出仍处于注释状态，因此还未进入统一 `.inst32` 生成链路
+- `cmult` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32` 生成链路；其中 `ciphertext_multiply` 要求 `num_q % dnum == 0`
 - `outputs/<case>/test_data/` 目前仅为目录占位，测试数据内容和格式仍需按后续联调约定补充
 
 ---
 
 ## TODO:
-统一密文到coff domain
+补充完整密文乘法的 DMA 地址约定、重线性化密钥测试数据与软件 reference golden 校验。

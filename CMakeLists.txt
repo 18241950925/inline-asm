@@ -20,6 +20,7 @@ add_executable(inline_asm_codegen
         src/poly/pmult.cpp
         src/poly/cmult.cpp
         src/operator/keyswitch.cpp
+        src/operator/ciphertext_multiply.cpp
 )
 
 target_include_directories(inline_asm_codegen

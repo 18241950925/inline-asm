@@ -16,9 +16,11 @@ const std::vector<std::string> kEncodableOutputs{
     "mm",
     "bconv",
     "pmult",
+    "cmult",
     "modup",
     "moddown",
     "keyswitch",
+    "ciphertext_multiply",
 };
 
 const std::vector<std::string> kAllOutputs{
@@ -32,6 +34,7 @@ const std::vector<std::string> kAllOutputs{
     "moddown",
     "auto",
     "keyswitch",
+    "ciphertext_multiply",
 };
 
 const std::vector<std::string> kSkippedOutputs{
