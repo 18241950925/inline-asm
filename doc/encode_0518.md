@@ -1,27 +1,22 @@
-# 2026-05-18 编码模块接入与输出目录更新说明
+# 2026-05-18 编码模块接入与当前交付流程
 
-本文件用于记录 `inline-asm` 项目在 2026 年 5 月 18 日完成的编码链路接入工作，说明 `encode` 模块如何并入当前工程、生成结果如何转为 32 位二进制文本，以及新的 `outputs/` 目录组织方式。
+本文件记录 2026 年 5 月 18 日完成的编码链路接入工作，并按当前工程结构说明 HPU 指令生成、32 位编码、FHE 软件 reference 和测试数据交付流程。
 
----
+## 1. 当前结论
 
-## 一、本次更新目标
+工程当前有三个独立程序入口：
 
-此前项目仅负责生成 HPU 的 C++ 内联汇编与 ASM 文本，编码工具独立维护，容易出现汇编生成逻辑与机器码转译逻辑不同步的问题。
+| 可执行文件 | 源入口 | 职责 |
+| --- | --- | --- |
+| `inline_asm_codegen` | `src/main.cpp` | 生成 HPU C++ 内联汇编与 ASM body |
+| `inline_asm_encode_outputs` | `test/encode/main.cpp` | 归档输出、编码 `.inst32`、生成 RV 接口冒烟流 |
+| `hpu_reference_vectors` | `test/reference/main.cpp` | 生成并自校验 FHE golden、UT/IT 输入输出数据 |
 
-本次更新完成以下目标：
+`test/reference/main.cpp` 没有替代 `src/main.cpp`。前者是软件算法 reference 的入口，后者仍是 HPU 指令流生成入口。顶层 `hpu_delivery` 目标负责依次调用三个程序，并执行交付门禁检查。
 
-1. 将 `encode` 作为库模块接入 `inline-asm` 工程。
-2. 让主生成流程产出的 ASM 可继续转译为 `.inst32` 二进制文本。
-3. 在不改动主分支原有 `output/` 生成方式的前提下，由后处理阶段将各算子的 `cpp / asm / inst32 / test_data` 统一收敛到根目录 `outputs/` 下。
-4. 对暂不具备直接编码条件的输出进行显式跳过，而不是生成错误机器码。
+## 2. 编码模块接入
 
----
-
-## 二、编码模块接入方式
-
-### 1. 目录结构
-
-新增的编码模块位于：
+编码模块位于：
 
 ```text
 encode/
@@ -38,166 +33,108 @@ encode/
     └── parser.cpp
 ```
 
-该模块保留独立边界，通过静态库 `hpu_encode` 对外提供能力。头文件直接放在 `encode/include/` 下，不再额外增加 `hpu/` 子目录。
-
-### 2. 构建接入
-
-顶层 `CMakeLists.txt` 增加：
+该模块通过静态库 `hpu_encode` 提供解析和编码能力。顶层构建同时接入：
 
 ```cmake
 add_subdirectory(encode)
 add_subdirectory(test/encode)
+add_subdirectory(test/reference)
 ```
 
-编码模块继续跟随当前项目的 C++17 标准，不额外提升工程语言版本。
+编码器可处理纯 ASM body 和带 `__asm__ volatile(...)` 包装的 C++ 内联汇编。对 C++ 输入只忽略函数与内联汇编包装边界，真实的非法指令仍会报错。
 
----
+## 3. 推荐执行方式
 
-## 三、当前支持的转译能力
-
-### 1. 指令语义对齐
-
-编码模块已与 2026 年 5 月 15 日更新后的指令文档保持一致：
-
-- `pntt / pintt` 按 `pdata, ptwiddle, stage, idx1, mode` 解释。
-- 第一个对象槽位表示原地变换的数据对象。
-- 第二个对象槽位表示 twiddle 对象。
-- 调试字段显示同步采用 `pdata / ptwiddle` 命名。
-
-### 2. 输入形式
-
-编码器当前可处理两类输入：
-
-- 纯 ASM body 文件；
-- 带 `__asm__ volatile(...)` 包装的 C++ 内联汇编文件。
-
-对于 C++ 形式输入，解析器会跳过生成器产生的边界语句，例如：
-
-- `void hpu_xxx(void) {`
-- `__asm__ volatile(`
-- `:`
-- `: "memory"`
-- `);`
-- `}`
-
-仅忽略明确的包装边界，不会吞掉真实的非法汇编指令。
-
----
-
-## 四、二进制生成流程
-
-### 1. 工具位置
-
-新增测试编码工具：
-
-```text
-test/encode/main.cpp
-```
-
-构建后生成可执行文件：
+完整交付使用统一目标：
 
 ```bash
-./build/test/encode/inline_asm_encode_outputs
+cmake -S . -B build
+cmake --build build -j --target hpu_delivery
+ctest --test-dir build --output-on-failure
 ```
 
-### 2. 推荐使用流程
+`hpu_delivery` 的执行顺序为：
 
-先由主程序生成汇编：
+1. `inline_asm_codegen both`：向 `output/` 写入 `.cpp` 与 `.asm`。
+2. `inline_asm_encode_outputs`：归档到 `outputs/<case>/`，并生成 `.inst32` 与 RV 冒烟流。
+3. `hpu_reference_vectors`：生成完整密文乘法 reference，并拆分各算子 UT 数据包。
+4. `check_delivery.cmake`：检查必要文件、算法验证结果和指令编码数量。
+
+需要单步调试时，可手工执行：
 
 ```bash
 ./build/inline_asm_codegen both
+./build/test/encode/inline_asm_encode_outputs
+./build/test/reference/hpu_reference_vectors \
+  outputs/ciphertext_multiply/test_data outputs
 ```
 
-此时仍先得到主分支原有的扁平输出：
+## 4. 输出目录
+
+`src/main.cpp` 保留原有扁平输出：
 
 ```text
 output/
 ├── ntt.cpp
 ├── ntt.asm
-├── intt.cpp
-├── intt.asm
+├── ciphertext_multiply.cpp
+├── ciphertext_multiply.asm
 └── ...
 ```
 
-再由编码辅助工具归档文件，并将可编码 ASM 转成 32 位二进制文本：
-
-```bash
-./build/test/encode/inline_asm_encode_outputs
-```
-
----
-
-## 五、统一输出目录
-
-为保留主分支生成逻辑，`src/main.cpp` 仍只负责写入 `output/`。运行编码辅助工具后，项目根目录会进一步整理出：
+编码与 reference 阶段进一步整理出：
 
 ```text
-outputs/
-```
-
-每个算子各自独立成目录。例如：
-
-```text
-outputs/ntt/
-├── ntt.cpp
-├── ntt.asm
-├── ntt.inst32
+outputs/<case>/
+├── <case>.cpp
+├── <case>.asm
+├── <case>.inst32
 └── test_data/
+    ├── README.md
+    ├── params.json
+    ├── artifact_manifest.csv
+    ├── *.bin
+    └── *.hex.txt
 ```
 
-当前会自动创建以下目录：
+具体文件名随算子变化。`.bin` 是硬件加载使用的小端 `uint64_t` 规范剩余数数组；每个二进制均有带用途、shape、维度和分块注释的 `.hex.txt` 人工可读版本。`artifact_manifest.csv` 记录路径、shape、字节数与校验值。
 
-| 目录 | 说明 |
-| --- | --- |
-| `outputs/ntt/` | NTT 生成结果 |
-| `outputs/intt/` | INTT 生成结果 |
-| `outputs/mm/` | 模乘基础样例 |
-| `outputs/bconv/` | Basis Conversion |
-| `outputs/pmult/` | 明密文乘法 |
-| `outputs/cmult/` | 密文乘法 |
-| `outputs/modup/` | 模提升 |
-| `outputs/moddown/` | 模回缩 |
-| `outputs/auto/` | 自同构 |
-| `outputs/keyswitch/` | 密钥切换 |
+当前覆盖目录包括 `ntt`、`intt`、`mm`、`bconv`、`pmult`、`cmult`、`modup`、`moddown`、`keyswitch`、`auto`、`ciphertext_multiply` 和 `rv_interface_smoke`。
 
-每个目录都会预留空的 `test_data/` 子目录，用于后续放置输入数据、期望结果或测试辅助文件。
+完整密文乘法目录额外包含：
 
----
+- `memory_map.json`：待 RTL/DMA ABI 确认的建议逻辑地址映射。
+- `dma_plan.csv`：各 FHE 阶段的输入、输出、域和基顺序。
+- `VALIDATION.txt`：解密一致性与阶段验证结果。
+- `input/`、`constants/`、`expected/`：密文、重线性化密钥和中间/最终 golden。
 
-## 六、当前编码状态
+## 5. 当前编码状态
 
-### 1. 已可直接生成 `.inst32` 的输出
+| 算子 | ASM | `.inst32` | reference test data |
+| --- | --- | --- | --- |
+| `ntt/intt/mm/bconv/pmult/cmult/modup/moddown/keyswitch` | 已生成 | 已生成 | 已生成 |
+| `ciphertext_multiply` | 已生成 | 已生成 | 已生成完整 FHE 流程数据 |
+| `auto` | 已生成 | 显式跳过 | `STATUS.md` 记录阻塞项 |
+| `rv_interface_smoke` | 已生成 | 已生成 | decode 期望与非法输入用例 |
 
-当前编码工具会处理：
+`auto` 的 ASM 仍含 `x_c0`、`x_offset`、`x_out` 等符号 DMA 寄存器，完成物理寄存器分配前不能可靠编码。
 
-| 算子 | 当前状态 |
-| --- | --- |
-| `ntt` | 可编码 |
-| `intt` | 可编码 |
-| `mm` | 可编码 |
-| `bconv` | 可编码 |
-| `pmult` | 可编码 |
-| `modup` | 可编码 |
-| `moddown` | 可编码 |
-| `keyswitch` | 可编码 |
+## 6. 参数配置
 
-### 2. 当前显式跳过的输出
+参数目前来自两处源配置：
 
-| 算子 | 原因 |
-| --- | --- |
-| `auto` | ASM 中仍包含 `x_c0`、`x_offset`、`x_out` 等符号地址寄存器占位符，尚未完成真实寄存器分配 |
+- `src/main.cpp`：HPU 指令流生成参数。
+- `test/reference/main.cpp`：FHE reference 和测试向量参数。
 
-### 3. 当前尚未生成完整 ASM body 的输出
+`outputs/*/test_data/params.json` 是生成结果，不是输入配置，重新生成时会覆盖。修改 `N/Q/P/dnum` 时需同步修改上述两处，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 8` 等当前实现约束。默认完整乘法参数为 `N=4096, Q=4, P=3, dnum=2`。
 
-| 算子 | 原因 |
-| --- | --- |
-| `cmult` | 当前 `main.cpp` 中仅生成 `.cpp` 包装文件，body ASM 输出仍处于注释状态 |
+## 7. 当前交付边界
 
----
+软件侧已经完成指令生成、`.inst32` 编码、完整密文乘法与重线性化 reference、算子 UT 数据和 RV 接口冒烟流。以下信息仍需硬件侧确认后才能把当前计算顺序流变成可直接执行程序：
 
-## 七、当前边界与后续建议
+1. `dload/dstore` 的 DDR 地址寄存器和偏移 ABI；当前完整乘法中仍使用 `x0/x0` 占位。
+2. `mod_ctx`、NTT twiddle、shuffle 配置和评估密钥的物理打包格式。
+3. HPU SRAM/scratch 容量、对象槽位驻留规则与覆盖时机。
+4. DMA 完成、`psync`、指令发射和异常处理的精确关系。
 
-1. `auto` 在完成符号寄存器到物理寄存器的映射前，不应强行生成 `.inst32`。
-2. `cmult` 若需要参与统一编码链路，应先恢复 body ASM 的生成。
-3. `outputs/<case>/test_data/` 目前仅作为目录占位；测试数据格式和生成规则仍需后续单独确定。
-4. 若后续需要一键生成全部交付物，可再增加统一构建目标，将汇编生成与二进制转译串联起来。
+完整验收项和硬件联调签字表见 `doc/HPU_TEST_DELIVERY.md`。

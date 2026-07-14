@@ -100,13 +100,13 @@ struct CiphertextMultiplyConfig {
 	int dnum;
 };
 
-constexpr NttConfig kNttCfg{64, 0, 1, 2};
+constexpr NttConfig kNttCfg{4096, 0, 1, 2};
 constexpr MmConfig kMmCfg{0, 1, 2, 3};
 // 为了演示 3-bit 槽位约束，示例采用 num_q = num_p = 1
 constexpr BconvConfig kBconvCfg{1, 1, 0, 1, 2, 3, 4, 5, 6};
-constexpr PmultConfig kPmultCfg{1, 0, 1, 2, 3, 4, 5};
-constexpr CmultConfig kCmultCfg{1, 0, 1, 2, 3, 4, 5, 6, 7};
-constexpr ModdownConfig kModdownCfg{1, 1, 0, 1, 2, 3, 4, 5, 6, 7};
+constexpr PmultConfig kPmultCfg{4, 0, 1, 2, 3, 4, 5};
+constexpr CmultConfig kCmultCfg{4, 0, 1, 2, 3, 4, 5, 6, 7};
+constexpr ModdownConfig kModdownCfg{4, 3, 0, 1, 2, 3, 4, 5, 6, 7};
 constexpr AutoConfig kAutoCfg{4096, 4, 3, 2, 1};
 constexpr CiphertextMultiplyConfig kCiphertextMultiplyCfg{4096, 4, 3, 2};
 
@@ -303,17 +303,24 @@ void test_moddown_codegen()
 
 void test_keyswitch_codegen()
 {
-	// test with N=4096, num_q=4, num_p=3, dnum=2
 	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
 		std::string keyswitch = generate_hpu_keyswitch_asm(
-		4096, 4, 3, 2, true);
+			kCiphertextMultiplyCfg.N,
+			kCiphertextMultiplyCfg.num_q,
+			kCiphertextMultiplyCfg.num_p,
+			kCiphertextMultiplyCfg.dnum,
+			true);
 	std::ofstream("output/keyswitch.cpp") << keyswitch;
 	std::cout << "Saved keyswitch ASM to output/keyswitch.cpp\n";
 	}
 
 	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
 		std::string keyswitch_body = generate_hpu_keyswitch_body_asm(
-		4096, 4, 3, 2, true);
+			kCiphertextMultiplyCfg.N,
+			kCiphertextMultiplyCfg.num_q,
+			kCiphertextMultiplyCfg.num_p,
+			kCiphertextMultiplyCfg.dnum,
+			true);
 	std::ofstream("output/keyswitch.asm") << keyswitch_body;
 	std::cout << "Saved keyswitch body ASM to output/keyswitch.asm\n";
 	}

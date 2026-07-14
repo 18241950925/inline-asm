@@ -2,6 +2,13 @@
 
 本文件用于说明当前项目中各个函数内 `dload` 占位符实际应加载的数据内容，便于测试同学准备输入数据与核对外部访存流。
 
+## 与当前交付流程的关系
+
+- `src/main.cpp` 通过 `inline_asm_codegen` 生成下述算子的 ASM，仍是 HPU 指令流入口。
+- `test/reference/main.cpp` 通过 `hpu_reference_vectors` 生成对应输入、常量、期望输出和人工可读 `.hex.txt`。
+- 完整密文乘法的逻辑数据地址见 `outputs/ciphertext_multiply/test_data/memory_map.json`，阶段搬运顺序见同目录 `dma_plan.csv`。
+- `memory_map.json` 目前是建议逻辑映射，不是已经确认的 RTL 地址 ABI。指令中的 `x0` 和符号地址寄存器必须在硬件接口确认后替换或重定位。
+
 ## 通用约定
 
 - `dload(rs1, rs2, pobj, type)` 仅代表“外部访存读取到片上对象槽位”的占位行为：
@@ -13,7 +20,7 @@
 ---
 
 ## `generate_hpu_bconv_body_asm`
-来源: [src/util/bconv.cpp](src/util/bconv.cpp)
+来源: [`src/util/bconv.cpp`](../src/util/bconv.cpp)
 
 ### dload 映射
 ![alt text](c0aaddcf5efa1bb152663b37b241c003.png)
@@ -31,7 +38,7 @@
 ---
 
 ## `generate_hpu_modup_body_asm`
-来源: [src/poly/modup.cpp](src/poly/modup.cpp)
+来源: [`src/poly/modup.cpp`](../src/poly/modup.cpp)
 
 ### dload 映射
 
@@ -41,7 +48,7 @@
 ---
 
 ## `generate_hpu_moddown_body_asm`
-来源: [src/poly/moddown.cpp](src/poly/moddown.cpp)
+来源: [`src/poly/moddown.cpp`](../src/poly/moddown.cpp)
 ![alt text](<截屏2026-05-15 08.47.51.png>)
 ### dload 映射
 
@@ -62,7 +69,7 @@
 ---
 
 ## `generate_hpu_cmult_body_asm`
-来源: [src/poly/cmult.cpp](src/poly/cmult.cpp)
+来源: [`src/poly/cmult.cpp`](../src/poly/cmult.cpp)
 
 ### dload 映射
 
@@ -77,7 +84,7 @@
 ---
 
 ## `generate_hpu_pmult_body_asm`
-来源: [src/poly/pmult.cpp](src/poly/pmult.cpp)
+来源: [`src/poly/pmult.cpp`](../src/poly/pmult.cpp)
 
 ### dload 映射
 
@@ -93,7 +100,7 @@
 ---
 
 ## `generate_hpu_ntt_body_asm` / `generate_hpu_intt_body_asm`
-来源: [src/util/ntt.cpp](src/util/ntt.cpp)
+来源: [`src/util/ntt.cpp`](../src/util/ntt.cpp)
 
 ### dload 映射
 
@@ -106,7 +113,7 @@
 ---
 
 ## `generate_hpu_keyswitch_body_asm`
-来源: [src/operator/keyswitch.cpp](src/operator/keyswitch.cpp)
+来源: [`src/operator/keyswitch.cpp`](../src/operator/keyswitch.cpp)
 
 ### dload 映射（核心步骤）
 
@@ -149,8 +156,36 @@
 
 ---
 
+## `generate_hpu_ciphertext_multiply_body_asm`
+来源: [`src/operator/ciphertext_multiply.cpp`](../src/operator/ciphertext_multiply.cpp)
+
+完整乘法遵循 RLWE 密文乘法与重线性化流程，不等同于仅计算三分量张量积的 `cmult`：
+
+1. 对两个输入密文的 `c0/c1` 分量执行 NTT。
+2. 在每个 `q_i` 上计算 `t0=a0*b0`、`t1=a0*b1+a1*b0`、`t2=a1*b1`。
+3. 将 `t0/t1/t2` 执行 INTT，得到 Q 基系数域三分量密文。
+4. 按 digit 分解 `t2`，执行 Q -> Q∪P 的 ModUp 和 NTT。
+5. 与重线性化密钥两个分量逐点乘并跨 digit 累加，再执行 INTT 和 Q∪P -> Q ModDown。
+6. 将 key-switch 结果分别加到 `t0/t1`，输出重新线性化后的二分量密文。
+
+### 主要 dload/dstore 数据
+
+| 阶段 | 加载内容 | 存储内容 |
+| --- | --- | --- |
+| 输入 NTT | `ct_a_q`、`ct_b_q`、Q 模上下文、NTT twiddle | 两个密文的 NTT 域分量 |
+| 张量积 | NTT 域 `a0/a1/b0/b1` | NTT 域 `t0/t1/t2` |
+| 张量积 INTT | `t0/t1/t2`、Q 模上下文、INTT twiddle | 系数域 `t0/t1/t2` |
+| digit ModUp/NTT | `t2` digit、Q∪P 模上下文、BConv 常量、twiddle | Q∪P 上的 digit NTT |
+| EVK 乘加 | digit NTT、`relinearization_key_ntt_qp`、累加中间值 | Q∪P 上两个 key-switch 分量 |
+| INTT/ModDown | 两个累加分量、Q∪P 常量与 twiddle | Q 基 key-switch correction |
+| 最终合并 | `t0/t1` 与两个 correction | `ciphertext_out_q` |
+
+Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphertext_multiply/test_data/artifact_manifest.csv`。当前生成器中的 `dload("x0", "x0", ...)` / `dstore("x0", "x0", ...)` 只表达数据依赖与计算顺序，尚不携带可执行的 DDR 地址。
+
+---
+
 ## `generate_hpu_auto_body_asm`
-来源: [src/poly/auto.cpp](src/poly/auto.cpp)
+来源: [`src/poly/auto.cpp`](../src/poly/auto.cpp)
 
 ### dload 映射（核心步骤）
 
@@ -203,4 +238,4 @@
 
 ## 未显式包含 dload 的算子
 
-- `generate_hpu_mm_body_asm` 仅执行 `pmul`，无 `dload`（见 [src/util/mm.cpp](src/util/mm.cpp)）。
+- `generate_hpu_mm_body_asm` 仅执行 `pmul`，无 `dload`（见 [`src/util/mm.cpp`](../src/util/mm.cpp)）。

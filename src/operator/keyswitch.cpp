@@ -26,7 +26,13 @@ std::string generate_hpu_keyswitch_body_asm(
     bool append_psync)
 {
     std::ostringstream asm_code;
-    
+
+    if (num_q <= 0 || num_p <= 0 || dnum <= 0 || !is_power_of_two(N)
+        || num_q % dnum != 0 || num_q + num_p > 8) {
+        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 8 contexts\n";
+        return asm_code.str();
+    }
+
     int total_bases = num_q + num_p;
     int digit_size = num_q / dnum;
 
@@ -43,7 +49,12 @@ std::string generate_hpu_keyswitch_body_asm(
 
         // 1. ModUp (Q -> P)
         asm_code << "        /* --- Step 1: ModUp --- */\n";
-        asm_code << generate_hpu_modup_body_asm(digit_size, num_p, q_offset, false);
+        asm_code << generate_hpu_hybrid_modup_body_asm(
+            num_q,
+            num_p,
+            digit_size,
+            q_offset,
+            false);
 
         // 2. NTT
         asm_code << "        /* --- Step 2: NTT on Q and P bases --- */\n";
@@ -143,8 +154,9 @@ std::string generate_hpu_keyswitch_asm(
     std::ostringstream asm_code;
     asm_code << "void hpu_keyswitch_N" << N << "_Q" << num_q << "_P" << num_p << "_D" << dnum << "(void) {\n";
 
-    if (num_q <= 0 || num_p <= 0 || !is_power_of_two(N) || dnum <= 0) {
-        asm_code << "    // Invalid config: require num_q/num_p/dnum > 0 and power-of-two N\n";
+    if (num_q <= 0 || num_p <= 0 || !is_power_of_two(N) || dnum <= 0
+        || num_q % dnum != 0 || num_q + num_p > 8) {
+        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 8 contexts\n";
         asm_code << "}\n";
         return asm_code.str();
     }

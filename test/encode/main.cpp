@@ -60,6 +60,20 @@ std::string format_word_bits(std::uint32_t word) {
     return bits;
 }
 
+std::string csv_field(std::string value) {
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (char ch : value) {
+        if (ch == '"') {
+            escaped.push_back('"');
+        }
+        escaped.push_back(ch);
+    }
+    escaped.push_back('"');
+    return escaped;
+}
+
 void write_inst32(const std::filesystem::path& path,
                   const std::vector<hpu::EncodedInstruction>& encoded) {
     std::ofstream output(path);
@@ -106,6 +120,68 @@ void encode_output(const std::filesystem::path& outputs_root,
               << " (" << encoded.size() << " instructions)\n";
 }
 
+void write_rv_interface_smoke(const std::filesystem::path& outputs_root) {
+    const std::string source =
+        "dload x10, x11, p0, 0\n"
+        "dload x10, x11, p1, 1\n"
+        "dload x10, x11, p4, 2\n"
+        "dload x10, x11, p5, 3\n"
+        "pmodld p4, 7, 32767\n"
+        "padd p2, p0, p1\n"
+        "paddi p2, p0, 255\n"
+        "psub p2, p0, p1\n"
+        "psubi p2, p0, 255\n"
+        "pmul p2, p0, p1\n"
+        "pmuli p2, p0, 255\n"
+        "pmac p2, p0, p1\n"
+        "pmaci p2, p0, 255\n"
+        "pntt p0, p3, 0, 0, 0\n"
+        "pntt p0, p3, 15, 15, 15\n"
+        "pintt p0, p3, 0, 0, 0\n"
+        "pshcfg p5, 7, 32767\n"
+        "pshuf p2, p0, 15, 15, 15\n"
+        "pseed 2097151\n"
+        "psample p2, p0, 15, 15, 15\n"
+        "psync 31, 7\n"
+        "dstore x10, x11, p2, 0\n"
+        "dstore x10, x11, p2, 1\n";
+
+    const auto case_dir = outputs_root / "rv_interface_smoke";
+    const auto test_data_dir = case_dir / "test_data";
+    std::filesystem::create_directories(test_data_dir);
+    {
+        std::ofstream output(case_dir / "rv_interface_smoke.asm");
+        output << source;
+    }
+
+    const auto encoded = hpu::assemble_source(source);
+    write_inst32(case_dir / "rv_interface_smoke.inst32", encoded);
+
+    std::ofstream decode(test_data_dir / "expected_decode.csv");
+    decode << "index,word_hex,opcode_class,normalized_asm\n";
+    for (std::size_t i = 0; i < encoded.size(); ++i) {
+        const auto opcode = encoded[i].word & 0x7fU;
+        decode << i << ',' << hpu::format_word_hex(encoded[i].word) << ','
+               << (opcode == 0x0bU ? "custom0" : "custom1") << ','
+               << csv_field(encoded[i].normalized_asm) << '\n';
+    }
+
+    std::ofstream negative(test_data_dir / "negative_cases.asm.txt");
+    negative << "# Each line must be rejected by the assembler/verifier.\n"
+             << "padd p8, p0, p1\n"
+             << "paddi p0, p1, 256\n"
+             << "pntt p0, p1, 16, 0, 0\n"
+             << "pmodld p0, 8, 0\n"
+             << "pseed 2097152\n"
+             << "psync 32, 0\n"
+             << "dload x32, x0, p0, 0\n"
+             << "dload x0, x0, p0, 4\n"
+             << "dstore x0, x0, p0, 2\n";
+
+    std::cout << "Generated RV interface smoke stream (" << encoded.size()
+              << " instructions) in " << case_dir << '\n';
+}
+
 }  // namespace
 
 int main() {
@@ -125,6 +201,8 @@ int main() {
             std::cout << "Skipped " << outputs_root / stem / (stem + ".asm")
                       << " (contains symbolic DMA register placeholders)\n";
         }
+
+        write_rv_interface_smoke(outputs_root);
 
         return 0;
     } catch (const std::exception& ex) {

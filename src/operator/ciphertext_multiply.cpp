@@ -21,7 +21,7 @@ bool is_power_of_two(int x)
 bool is_valid_config(int N, int num_q, int num_p, int dnum)
 {
     return is_power_of_two(N) && num_q > 0 && num_p > 0 && dnum > 0
-        && (num_q % dnum == 0);
+        && num_q % dnum == 0 && num_q + num_p <= 8;
 }
 
 std::string generate_basis_ntt_body_asm(
@@ -105,10 +105,15 @@ std::string generate_relinearize_t2_body_asm(
         asm_code << "        /* --- Relinearization digit " << d << " --- */\n";
         asm_code << "        /* Step 1: ModUp t2 digit Q_" << q_offset
                  << "..Q_" << (q_offset + digit_size - 1)
-                 << " -> Q_digit union P */\n";
-        asm_code << generate_hpu_modup_body_asm(digit_size, num_p, q_offset, false);
+                 << " -> full Q union P */\n";
+        asm_code << generate_hpu_hybrid_modup_body_asm(
+            num_q,
+            num_p,
+            digit_size,
+            q_offset,
+            false);
 
-        asm_code << "        /* Step 2: NTT on decomposed t2 digit over Q_digit union P */\n";
+        asm_code << "        /* Step 2: NTT on decomposed t2 digit over full Q union P */\n";
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* base_" << i << " */\n";
             asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
@@ -195,7 +200,7 @@ std::string generate_hpu_ciphertext_multiply_body_asm(
     std::ostringstream asm_code;
 
     if (!is_valid_config(N, num_q, num_p, dnum)) {
-        asm_code << "        // Invalid config: require power-of-two N, num_q/num_p/dnum > 0, and num_q % dnum == 0\n";
+        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 8 contexts\n";
         return asm_code.str();
     }
 
@@ -227,7 +232,7 @@ std::string generate_hpu_ciphertext_multiply_asm(
              << "_P" << num_p << "_D" << dnum << "(void) {\n";
 
     if (!is_valid_config(N, num_q, num_p, dnum)) {
-        asm_code << "    // Invalid config: require power-of-two N, num_q/num_p/dnum > 0, and num_q % dnum == 0\n";
+        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 8 contexts\n";
         asm_code << "}\n";
         return asm_code.str();
     }

@@ -4,7 +4,7 @@
 
 ## 1. 项目结构
 
-代码按照功能依赖分层，并分别维护在 `include` 及 `src` 目录下，包含三大类生成模块，以及独立的编码与测试辅助模块：
+代码按照功能依赖分层，并分别维护在 `include` 及 `src` 目录下，包含三大类生成模块，以及独立的编码、reference 与测试辅助模块：
 
 ### 1) 基础工具层 (`util`)
 - **`util/hpu_asm.hpp/cpp`**：基础 HPU 汇编助记符封装和生成接口，遵循《HPU_INSTRUCTION_MANUAL.md》。
@@ -35,8 +35,23 @@
 - **`test/encode/main.cpp`**：读取主流程生成的 `output/<case>.cpp` 与 `output/<case>.asm`，归档到 `outputs/<case>/`，再调用 `hpu_encode` 生成对应的 32 位二进制文本。
 - **`inline_asm_encode_outputs`**：构建后生成的测试编码工具。
 
-### 6) 后端约束文档 (`doc`)
-- **`doc/HPU_BACKEND_CONSTRAINT_SPEC.md`**：面向 LLVM/MLIR 风格后端对接的硬件信息需求清单，覆盖 target 描述、数据布局、DMA ABI、指令语义、调度约束、算子 contract 与测试向量要求。
+### 6) 软件 Reference (`test/reference`)
+- **`test/reference/main.cpp`**：独立的软件算法入口，生成确定性的 RNS/RLWE 输入、重线性化密钥、完整密文乘法 golden、中间检查点和各算子 UT 数据，并执行解密一致性校验。
+- **`hpu_reference_vectors`**：构建后生成的 reference 数据工具；它不生成 HPU 指令，也不替代 `src/main.cpp`。
+
+### 7) 项目文档 (`doc`)
+- **`doc/HPU_INSTRUCTION_MANUAL.md`**：当前 HPU 指令格式和语义说明。
+- **`doc/HPU_TEST_DELIVERY.md`**：指令流、完整密文乘法 golden、RV 接口冒烟用例、验收命令和硬件联调前置项。
+
+### 8) 三个程序入口
+
+| 可执行文件 | 源入口 | 职责 | 主要输出 |
+| --- | --- | --- | --- |
+| `inline_asm_codegen` | `src/main.cpp` | 调用各级 codegen，生成 HPU C++ 内联汇编和 ASM body | `output/*.cpp`、`output/*.asm` |
+| `inline_asm_encode_outputs` | `test/encode/main.cpp` | 归档生成结果、编码 `.inst32`、生成 RV 接口冒烟流 | `outputs/<case>/*`、`outputs/rv_interface_smoke/*` |
+| `hpu_reference_vectors` | `test/reference/main.cpp` | 计算软件 golden、解密校验并拆分 UT/IT 数据包 | `outputs/<case>/test_data/*` |
+
+`src/main.cpp` 仍是指令生成主入口。`test/reference/main.cpp` 是另一独立可执行文件的入口，两者没有替代关系。顶层 `hpu_delivery` 目标只是按上述顺序编排三个程序并运行交付检查。
 
 ---
 
@@ -66,6 +81,13 @@ cmake --build . -j
 ./build/test/encode/inline_asm_encode_outputs
 ```
 
+推荐使用统一交付目标，一次完成指令生成、编码、FHE reference 数据生成和交付门禁检查：
+
+```bash
+cmake --build build -j --target hpu_delivery
+ctest --test-dir build --output-on-failure
+```
+
 主生成程序仍保持主分支的输出方式，先在根目录生成扁平的 `output/` 文件夹；编码辅助工具随后会把 `.cpp` 与 `.asm` 归档到 `outputs/<case>/`，并将可直接编码的结果写回同一目录。仍含符号寄存器占位符的文件会被显式跳过。
 
 执行 `inline_asm_codegen` 后会先得到主分支约定的扁平输出：
@@ -75,7 +97,7 @@ cmake --build . -j
 - `output/intt.asm`
 - `...`
 
-执行 `inline_asm_encode_outputs` 后，会进一步整理出根目录下的 `outputs/` 文件夹。每个算子拥有独立子目录，目录中可同时存放对应的 C++ 内联汇编、ASM、二进制编码以及测试数据占位目录：
+执行 `inline_asm_encode_outputs` 后，会进一步整理出根目录下的 `outputs/` 文件夹。执行 `hpu_reference_vectors` 后，各算子目录会补充输入、期望结果和可读 golden：
 - `outputs/ntt/`
 - `outputs/intt/`
 - `outputs/mm/`
@@ -87,25 +109,35 @@ cmake --build . -j
 - `outputs/auto/`
 - `outputs/keyswitch/`
 - `outputs/ciphertext_multiply/`
+- `outputs/rv_interface_smoke/`
 
 例如 `outputs/ntt/` 下会包含：
 - `ntt.cpp`
 - `ntt.asm`
 - `ntt.inst32`（运行编码工具后生成）
-- `test_data/`
+- `test_data/input.bin`、`test_data/input.hex.txt`
+- `test_data/expected.bin`、`test_data/expected.hex.txt`
+- `test_data/params.json`、`test_data/artifact_manifest.csv`
 
 ---
 
-## 3. 当前示例参数（main.cpp）
+## 3. 入口与参数
 
-入口文件 `src/main.cpp` 对所有操作函数进行了组合测试。
+当前完整流程由三个阶段组成：
 
-当前示例生成流程由两阶段组成：
+1. `inline_asm_codegen` 从 `src/main.cpp` 进入，向 `output/` 生成 `.cpp` 与 `.asm`。
+2. `inline_asm_encode_outputs` 从 `test/encode/main.cpp` 进入，归档结果并把可编码 ASM 转成 `.inst32`。
+3. `hpu_reference_vectors` 从 `test/reference/main.cpp` 进入，计算并验证 test data，然后写入 `outputs/<case>/test_data/`。
 
-1. `inline_asm_codegen` 按主分支约定先在 `output/` 下生成 `.cpp` 与 `.asm`。
-2. `inline_asm_encode_outputs` 负责将它们归档到 `outputs/<case>/`，并把可直接编码的 `.asm` 继续转译为 `.inst32`。
+当前参数尚未收敛到单一配置文件：
 
-各算子的静态测试数据尚未在主流程中自动生成，当前仅在 `outputs/<case>/test_data/` 中预留目录位置。
+- HPU 指令流参数位于 `src/main.cpp` 的 `kNttCfg`、`kPmultCfg`、`kCmultCfg`、`kModdownCfg`、`kAutoCfg` 和 `kCiphertextMultiplyCfg`。
+- Reference 参数位于 `test/reference/main.cpp` 的 `kN`、`kNumQ`、`kNumP`、`kDnum`、`kPlainModulus` 和 `kSeed`。
+- `outputs/*/test_data/params.json` 是生成结果，不是输入配置；直接修改后会在下一次生成时被覆盖。
+
+修改 `N/Q/P/dnum` 时必须同步修改两处源配置，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 8` 等约束。当前统一示例为 `N=4096, Q=4, P=3, dnum=2`。
+
+`hpu_delivery` 会为 `ciphertext_multiply` 自动生成与主配置一致的 `N=4096, Q=4, P=3, dnum=2` 输入、评估密钥、阶段 golden、最终输出、明文校验、逻辑内存映射与 artifact checksum，并从同一 reference 拆分出 NTT、INTT、MM、BConv、ModUp、PMULT、CMULT、ModDown 和 KeySwitch 的独立 UT 数据包。`auto/test_data/STATUS.md` 记录该算子当前的寄存器分配阻塞项。
 
 
 ## 4. 关键设计实现说明
@@ -141,10 +173,12 @@ cmake --build . -j
 - `pmodld`/`pshcfg` 对应对象槽位已通过 `dload` 准备好模上下文与 shuffle 配置
 - 需要阶段收敛时使用 `psync`
 - 当前 `.inst32` 输出仅覆盖可直接完成寄存器解析的 ASM；`auto` 仍含 `x_c0`、`x_offset`、`x_out` 等符号寄存器占位符，需在完成物理寄存器分配后再编码
-- `cmult` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32` 生成链路；其中 `ciphertext_multiply` 要求 `num_q % dnum == 0`
-- `outputs/<case>/test_data/` 目前仅为目录占位，测试数据内容和格式仍需按后续联调约定补充
+- `cmult` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32` 生成链路；其中 `ciphertext_multiply` 要求 `num_q % dnum == 0` 且 `num_q + num_p <= 8`
+- `ciphertext_multiply/test_data` 已由软件 reference 自动生成；二进制格式、shape 和校验值见其中的 `params.json` 与 `artifact_manifest.csv`
+- 当前完整乘法和大部分算子的 DMA 地址仍使用 `x0/x0` 占位；硬件确认 DMA ABI 前，`.inst32` 是计算顺序流而不是可直接执行程序
 
 ---
 
-## TODO:
-补充完整密文乘法的 DMA 地址约定、重线性化密钥测试数据与软件 reference golden 校验。
+## 6. 当前交付边界
+
+软件侧已完成指令生成、编码、完整密文乘法/重线性化 reference golden 和 RV 接口冒烟流。硬件直接执行仍依赖 DMA 地址 ABI、`mod_ctx`/twiddle 打包、scratch 布局和 DMA/`psync` 完成关系；详细签字项见 `doc/HPU_TEST_DELIVERY.md`。

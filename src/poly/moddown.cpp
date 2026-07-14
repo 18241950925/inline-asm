@@ -5,13 +5,19 @@
 
 #include <sstream>
 #include <string>
-// coff domain
+#include <vector>
+// Coefficient domain.
 std::string generate_hpu_moddown_body_asm(
     int num_q,
     int num_p,
     bool append_psync)
 {
     std::ostringstream asm_code;
+
+    if (num_q <= 0 || num_p <= 0 || num_q + num_p > 8) {
+        asm_code << "        // Invalid config: require positive bases within 3-bit context space\n";
+        return asm_code.str();
+    }
 
     // 复用 HPU 硬件槽位
     const int POBJ_MOD_CTX = 4;
@@ -20,18 +26,26 @@ std::string generate_hpu_moddown_body_asm(
     const int POBJ_P_INV = 2; //用于存放 P^{-1} mod q_i
 
     asm_code << "        /* MODDOWN stage-1: BConv P -> Q (correction term) */\n";
-    // 复用 bconv 主体：输入基改为 P，目标基改为 Q。
-    asm_code << generate_hpu_bconv_body_asm(
-        num_p,
-        num_q,
+    // Global context order is Q followed by P.
+    std::vector<int> source_contexts;
+    std::vector<int> target_contexts;
+    for (int i = 0; i < num_p; ++i) {
+        source_contexts.push_back(num_q + i);
+    }
+    for (int i = 0; i < num_q; ++i) {
+        target_contexts.push_back(i);
+    }
+    asm_code << generate_hpu_bconv_contexts_body_asm(
+        source_contexts,
+        target_contexts,
         false);
 
-    asm_code << "        // dload all mod contexts (placeholder)\\n";
+    asm_code << "        // dload all mod contexts (placeholder)\n";
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
 
-    asm_code << "        /* MODDOWN stage-2: q <- q - correction (mod q_i) */\\n";
+    asm_code << "        /* MODDOWN stage-2: q <- q - correction (mod q_i) */\n";
     for (int i = 0; i < num_q; ++i) {
-        asm_code << "        /* q_" << i << " */\\n";
+        asm_code << "        /* q_" << i << " */\n";
         asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
 
         asm_code << hpu::dload("x0", "x0", POBJ_Q, hpu::DataType::poly);
@@ -59,8 +73,8 @@ std::string generate_hpu_moddown_asm(
     std::ostringstream asm_code;
     asm_code << "void hpu_moddown_Q" << num_q << "_P" << num_p << "(void) {\n";
 
-    if (num_q <= 0 || num_p <= 0) {
-        asm_code << "    // Invalid config: require num_q/num_p > 0\n";
+    if (num_q <= 0 || num_p <= 0 || num_q + num_p > 8) {
+        asm_code << "    // Invalid config: require positive bases within 3-bit context space\n";
         asm_code << "}\n";
         return asm_code.str();
     }

@@ -1,0 +1,1165 @@
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <random>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace {
+
+using U64 = std::uint64_t;
+using U128 = unsigned __int128;
+using I128 = __int128;
+using Poly = std::vector<U64>;
+using BasisPoly = std::vector<Poly>;
+using Ciphertext = std::array<BasisPoly, 2>;
+using TensorCiphertext = std::array<BasisPoly, 3>;
+
+constexpr std::size_t kN = 4096;
+constexpr std::size_t kNumQ = 4;
+constexpr std::size_t kNumP = 3;
+constexpr std::size_t kDnum = 2;
+constexpr U64 kPlainModulus = 257;
+constexpr U64 kSeed = 0x4850555f464845ULL;
+
+struct Artifact {
+    std::string path;
+    std::string role;
+    std::vector<std::size_t> shape;
+    std::vector<U64> words;
+    std::vector<std::string> axes;
+    U64 checksum = 0;
+};
+
+U64 add_mod(U64 a, U64 b, U64 modulus)
+{
+    return static_cast<U64>((static_cast<U128>(a) + b) % modulus);
+}
+
+U64 sub_mod(U64 a, U64 b, U64 modulus)
+{
+    return a >= b ? a - b : modulus - (b - a);
+}
+
+U64 mul_mod(U64 a, U64 b, U64 modulus)
+{
+    return static_cast<U64>((static_cast<U128>(a) * b) % modulus);
+}
+
+U64 pow_mod(U64 base, U64 exponent, U64 modulus)
+{
+    U64 result = 1;
+    while (exponent != 0) {
+        if ((exponent & 1U) != 0) {
+            result = mul_mod(result, base, modulus);
+        }
+        base = mul_mod(base, base, modulus);
+        exponent >>= 1U;
+    }
+    return result;
+}
+
+U64 inverse_mod(U64 value, U64 modulus)
+{
+    I128 t = 0;
+    I128 new_t = 1;
+    I128 r = static_cast<I128>(modulus);
+    I128 new_r = static_cast<I128>(value % modulus);
+    while (new_r != 0) {
+        const I128 quotient = r / new_r;
+        const I128 old_t = t;
+        t = new_t;
+        new_t = old_t - quotient * new_t;
+        const I128 old_r = r;
+        r = new_r;
+        new_r = old_r - quotient * new_r;
+    }
+    if (r != 1) {
+        throw std::runtime_error("modular inverse does not exist");
+    }
+    t %= static_cast<I128>(modulus);
+    if (t < 0) {
+        t += static_cast<I128>(modulus);
+    }
+    return static_cast<U64>(t);
+}
+
+bool is_prime(U64 value)
+{
+    if (value < 2) {
+        return false;
+    }
+    if ((value & 1U) == 0) {
+        return value == 2;
+    }
+    for (U64 divisor = 3; divisor * divisor <= value; divisor += 2) {
+        if (value % divisor == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+U64 find_ntt_prime(U64 start, U64 order)
+{
+    U64 candidate = start;
+    const U64 remainder = candidate % order;
+    candidate += remainder <= 1 ? 1 - remainder : order + 1 - remainder;
+    while (!is_prime(candidate)) {
+        candidate += order;
+    }
+    return candidate;
+}
+
+U64 find_primitive_2n_root(U64 modulus, std::size_t n)
+{
+    const U64 order = static_cast<U64>(2 * n);
+    for (U64 base = 2; base < modulus; ++base) {
+        const U64 candidate = pow_mod(base, (modulus - 1) / order, modulus);
+        if (pow_mod(candidate, static_cast<U64>(n), modulus) == modulus - 1) {
+            return candidate;
+        }
+    }
+    throw std::runtime_error("failed to find primitive 2N-th root");
+}
+
+void cyclic_ntt(Poly& values, U64 omega, U64 modulus, bool inverse)
+{
+    const std::size_t n = values.size();
+    for (std::size_t i = 1, j = 0; i < n; ++i) {
+        std::size_t bit = n >> 1U;
+        while ((j & bit) != 0) {
+            j ^= bit;
+            bit >>= 1U;
+        }
+        j ^= bit;
+        if (i < j) {
+            std::swap(values[i], values[j]);
+        }
+    }
+
+    const U64 active_root = inverse ? inverse_mod(omega, modulus) : omega;
+    for (std::size_t length = 2; length <= n; length <<= 1U) {
+        const U64 step = pow_mod(active_root, static_cast<U64>(n / length), modulus);
+        for (std::size_t begin = 0; begin < n; begin += length) {
+            U64 twiddle = 1;
+            for (std::size_t j = 0; j < length / 2; ++j) {
+                const U64 even = values[begin + j];
+                const U64 odd = mul_mod(values[begin + j + length / 2], twiddle, modulus);
+                values[begin + j] = add_mod(even, odd, modulus);
+                values[begin + j + length / 2] = sub_mod(even, odd, modulus);
+                twiddle = mul_mod(twiddle, step, modulus);
+            }
+        }
+    }
+
+    if (inverse) {
+        const U64 n_inverse = inverse_mod(static_cast<U64>(n), modulus);
+        for (U64& value : values) {
+            value = mul_mod(value, n_inverse, modulus);
+        }
+    }
+}
+
+void negacyclic_ntt(Poly& values, U64 psi, U64 modulus, bool inverse)
+{
+    const U64 omega = mul_mod(psi, psi, modulus);
+    if (!inverse) {
+        U64 twist = 1;
+        for (U64& value : values) {
+            value = mul_mod(value, twist, modulus);
+            twist = mul_mod(twist, psi, modulus);
+        }
+        cyclic_ntt(values, omega, modulus, false);
+        return;
+    }
+
+    cyclic_ntt(values, omega, modulus, true);
+    const U64 psi_inverse = inverse_mod(psi, modulus);
+    U64 twist = 1;
+    for (U64& value : values) {
+        value = mul_mod(value, twist, modulus);
+        twist = mul_mod(twist, psi_inverse, modulus);
+    }
+}
+
+Poly add_poly(const Poly& left, const Poly& right, U64 modulus)
+{
+    Poly out(left.size());
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        out[i] = add_mod(left[i], right[i], modulus);
+    }
+    return out;
+}
+
+Poly sub_poly(const Poly& left, const Poly& right, U64 modulus)
+{
+    Poly out(left.size());
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        out[i] = sub_mod(left[i], right[i], modulus);
+    }
+    return out;
+}
+
+Poly scalar_poly(const Poly& input, U64 scalar, U64 modulus)
+{
+    Poly out(input.size());
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        out[i] = mul_mod(input[i], scalar, modulus);
+    }
+    return out;
+}
+
+Poly pointwise_mul(const Poly& left, const Poly& right, U64 modulus)
+{
+    Poly out(left.size());
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        out[i] = mul_mod(left[i], right[i], modulus);
+    }
+    return out;
+}
+
+Poly negacyclic_mul(const Poly& left, const Poly& right, U64 modulus, U64 psi)
+{
+    Poly left_ntt = left;
+    Poly right_ntt = right;
+    negacyclic_ntt(left_ntt, psi, modulus, false);
+    negacyclic_ntt(right_ntt, psi, modulus, false);
+    Poly out = pointwise_mul(left_ntt, right_ntt, modulus);
+    negacyclic_ntt(out, psi, modulus, true);
+    return out;
+}
+
+Poly encode_signed(const std::vector<std::int64_t>& input, U64 modulus)
+{
+    Poly out(input.size());
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        const std::int64_t value = input[i];
+        out[i] = value >= 0
+            ? static_cast<U64>(value) % modulus
+            : sub_mod(0, static_cast<U64>(-value) % modulus, modulus);
+    }
+    return out;
+}
+
+BasisPoly encode_basis(const std::vector<std::int64_t>& input,
+                       const std::vector<U64>& moduli)
+{
+    BasisPoly out;
+    out.reserve(moduli.size());
+    for (U64 modulus : moduli) {
+        out.push_back(encode_signed(input, modulus));
+    }
+    return out;
+}
+
+BasisPoly transform_basis(const BasisPoly& input,
+                          const std::vector<U64>& moduli,
+                          const std::vector<U64>& roots,
+                          bool inverse)
+{
+    BasisPoly out = input;
+    for (std::size_t i = 0; i < out.size(); ++i) {
+        negacyclic_ntt(out[i], roots[i], moduli[i], inverse);
+    }
+    return out;
+}
+
+Ciphertext encrypt_test_message(const std::vector<std::int64_t>& message,
+                                const BasisPoly& secret,
+                                const std::vector<U64>& moduli,
+                                const std::vector<U64>& roots,
+                                std::mt19937_64& rng)
+{
+    Ciphertext ciphertext;
+    ciphertext[0].resize(moduli.size());
+    ciphertext[1].resize(moduli.size());
+    for (std::size_t basis = 0; basis < moduli.size(); ++basis) {
+        const U64 modulus = moduli[basis];
+        Poly a(kN);
+        for (U64& value : a) {
+            value = rng() % modulus;
+        }
+        const Poly product = negacyclic_mul(a, secret[basis], modulus, roots[basis]);
+        const Poly encoded = encode_signed(message, modulus);
+        ciphertext[0][basis] = sub_poly(encoded, product, modulus);
+        ciphertext[1][basis] = std::move(a);
+    }
+    return ciphertext;
+}
+
+Poly bconv_to_target(const BasisPoly& source,
+                     const std::vector<U64>& source_moduli,
+                     U64 target_modulus)
+{
+    if (source.empty() || source.size() != source_moduli.size()) {
+        throw std::runtime_error("invalid BConv source");
+    }
+    Poly out(source.front().size(), 0);
+    for (std::size_t j = 0; j < source.size(); ++j) {
+        U64 qhat = 1;
+        for (std::size_t k = 0; k < source_moduli.size(); ++k) {
+            if (k == j) {
+                continue;
+            }
+            if (qhat > UINT64_MAX / source_moduli[k]) {
+                throw std::runtime_error("BConv basis-hat exceeds uint64_t");
+            }
+            qhat *= source_moduli[k];
+        }
+        const U64 qhat_inverse = inverse_mod(qhat % source_moduli[j], source_moduli[j]);
+        const U64 qhat_target = qhat % target_modulus;
+        for (std::size_t i = 0; i < out.size(); ++i) {
+            const U64 normalized = mul_mod(source[j][i], qhat_inverse, source_moduli[j]);
+            out[i] = add_mod(out[i], mul_mod(normalized, qhat_target, target_modulus), target_modulus);
+        }
+    }
+    return out;
+}
+
+BasisPoly hybrid_modup(const BasisPoly& input_q,
+                       const std::vector<U64>& q_moduli,
+                       const std::vector<U64>& all_moduli,
+                       std::size_t offset,
+                       std::size_t digit_size)
+{
+    BasisPoly source;
+    std::vector<U64> source_moduli;
+    for (std::size_t i = 0; i < digit_size; ++i) {
+        source.push_back(input_q[offset + i]);
+        source_moduli.push_back(q_moduli[offset + i]);
+    }
+
+    BasisPoly out(all_moduli.size());
+    for (std::size_t basis = 0; basis < all_moduli.size(); ++basis) {
+        if (basis >= offset && basis < offset + digit_size) {
+            out[basis] = input_q[basis];
+        } else {
+            out[basis] = bconv_to_target(source, source_moduli, all_moduli[basis]);
+        }
+    }
+    return out;
+}
+
+U64 product_mod(const std::vector<U64>& values, U64 modulus)
+{
+    U64 result = 1;
+    for (U64 value : values) {
+        result = mul_mod(result, value % modulus, modulus);
+    }
+    return result;
+}
+
+std::vector<U64> crt_digit_factors(const std::vector<U64>& q_moduli,
+                                   std::size_t offset,
+                                   std::size_t digit_size,
+                                   const std::vector<U64>& all_moduli)
+{
+    U64 q_digit = 1;
+    U64 q_other = 1;
+    for (std::size_t i = 0; i < q_moduli.size(); ++i) {
+        U64& product = (i >= offset && i < offset + digit_size) ? q_digit : q_other;
+        if (product > UINT64_MAX / q_moduli[i]) {
+            throw std::runtime_error("CRT digit product exceeds uint64_t");
+        }
+        product *= q_moduli[i];
+    }
+    const U64 inverse = inverse_mod(q_other % q_digit, q_digit);
+    std::vector<U64> out;
+    out.reserve(all_moduli.size());
+    for (U64 modulus : all_moduli) {
+        out.push_back(mul_mod(q_other % modulus, inverse % modulus, modulus));
+    }
+    return out;
+}
+
+BasisPoly moddown(const BasisPoly& input_qp,
+                  const std::vector<U64>& q_moduli,
+                  const std::vector<U64>& p_moduli)
+{
+    BasisPoly source_p(input_qp.begin() + static_cast<std::ptrdiff_t>(q_moduli.size()),
+                       input_qp.end());
+    BasisPoly out(q_moduli.size());
+    for (std::size_t i = 0; i < q_moduli.size(); ++i) {
+        const U64 modulus = q_moduli[i];
+        const Poly correction = bconv_to_target(source_p, p_moduli, modulus);
+        const U64 p_inverse = inverse_mod(product_mod(p_moduli, modulus), modulus);
+        out[i].resize(kN);
+        for (std::size_t coefficient = 0; coefficient < kN; ++coefficient) {
+            out[i][coefficient] = mul_mod(
+                sub_mod(input_qp[i][coefficient], correction[coefficient], modulus),
+                p_inverse,
+                modulus);
+        }
+    }
+    return out;
+}
+
+BasisPoly decrypt_ciphertext(const Ciphertext& ciphertext,
+                             const BasisPoly& secret,
+                             const std::vector<U64>& moduli,
+                             const std::vector<U64>& roots)
+{
+    BasisPoly out(moduli.size());
+    for (std::size_t basis = 0; basis < moduli.size(); ++basis) {
+        out[basis] = add_poly(
+            ciphertext[0][basis],
+            negacyclic_mul(ciphertext[1][basis], secret[basis], moduli[basis], roots[basis]),
+            moduli[basis]);
+    }
+    return out;
+}
+
+BasisPoly decrypt_tensor(const TensorCiphertext& tensor,
+                         const BasisPoly& secret,
+                         const std::vector<U64>& moduli,
+                         const std::vector<U64>& roots)
+{
+    BasisPoly out(moduli.size());
+    for (std::size_t basis = 0; basis < moduli.size(); ++basis) {
+        const Poly secret_squared = negacyclic_mul(
+            secret[basis], secret[basis], moduli[basis], roots[basis]);
+        const Poly linear = negacyclic_mul(
+            tensor[1][basis], secret[basis], moduli[basis], roots[basis]);
+        const Poly quadratic = negacyclic_mul(
+            tensor[2][basis], secret_squared, moduli[basis], roots[basis]);
+        out[basis] = add_poly(add_poly(tensor[0][basis], linear, moduli[basis]),
+                              quadratic,
+                              moduli[basis]);
+    }
+    return out;
+}
+
+std::vector<std::int64_t> plaintext_product(const std::vector<std::int64_t>& left,
+                                            const std::vector<std::int64_t>& right)
+{
+    std::vector<std::int64_t> out(kN, 0);
+    for (std::size_t i = 0; i < kN; ++i) {
+        for (std::size_t j = 0; j < kN; ++j) {
+            const std::int64_t term = left[i] * right[j];
+            const std::size_t index = i + j;
+            if (index < kN) {
+                out[index] += term;
+            } else {
+                out[index - kN] -= term;
+            }
+        }
+    }
+    return out;
+}
+
+U64 fnv1a_words(const std::vector<U64>& words)
+{
+    U64 hash = 1469598103934665603ULL;
+    for (U64 word : words) {
+        for (int byte = 0; byte < 8; ++byte) {
+            hash ^= (word >> (8 * byte)) & 0xffU;
+            hash *= 1099511628211ULL;
+        }
+    }
+    return hash;
+}
+
+void append_words(std::vector<U64>& out, const Poly& poly)
+{
+    out.insert(out.end(), poly.begin(), poly.end());
+}
+
+void append_words(std::vector<U64>& out, const BasisPoly& basis)
+{
+    for (const Poly& poly : basis) {
+        append_words(out, poly);
+    }
+}
+
+void write_binary(const std::filesystem::path& path, const std::vector<U64>& words)
+{
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output(path, std::ios::binary);
+    if (!output) {
+        throw std::runtime_error("failed to create " + path.string());
+    }
+    for (U64 word : words) {
+        for (int byte = 0; byte < 8; ++byte) {
+            output.put(static_cast<char>((word >> (8 * byte)) & 0xffU));
+        }
+    }
+}
+
+void write_text(const std::filesystem::path& path, const std::string& text)
+{
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output(path);
+    if (!output) {
+        throw std::runtime_error("failed to create " + path.string());
+    }
+    output << text;
+}
+
+std::string hex64(U64 value)
+{
+    std::ostringstream out;
+    out << "0x" << std::hex << std::setw(16) << std::setfill('0') << value;
+    return out.str();
+}
+
+std::string shape_string(const std::vector<std::size_t>& shape)
+{
+    std::ostringstream out;
+    for (std::size_t i = 0; i < shape.size(); ++i) {
+        if (i != 0) {
+            out << 'x';
+        }
+        out << shape[i];
+    }
+    return out.str();
+}
+
+std::string csv_field(const std::string& value)
+{
+    std::string escaped;
+    escaped.reserve(value.size() + 2);
+    escaped.push_back('"');
+    for (char ch : value) {
+        if (ch == '"') {
+            escaped.push_back('"');
+        }
+        escaped.push_back(ch);
+    }
+    escaped.push_back('"');
+    return escaped;
+}
+
+void add_artifact(std::vector<Artifact>& artifacts,
+                  std::string path,
+                  std::string role,
+                  std::vector<std::size_t> shape,
+                  std::vector<U64> words,
+                  std::vector<std::string> axes = {})
+{
+    Artifact artifact{
+        std::move(path),
+        std::move(role),
+        std::move(shape),
+        std::move(words),
+        std::move(axes),
+        0};
+    artifact.checksum = fnv1a_words(artifact.words);
+    artifacts.push_back(std::move(artifact));
+}
+
+std::filesystem::path readable_path(const std::filesystem::path& binary_path)
+{
+    std::filesystem::path path = binary_path;
+    path.replace_extension(".hex.txt");
+    return path;
+}
+
+std::vector<std::string> artifact_axes(const Artifact& artifact)
+{
+    if (artifact.axes.size() == artifact.shape.size()) {
+        return artifact.axes;
+    }
+    std::vector<std::string> axes;
+    axes.reserve(artifact.shape.size());
+    for (std::size_t i = 0; i < artifact.shape.size(); ++i) {
+        axes.push_back(i + 1 == artifact.shape.size()
+            ? "coefficient"
+            : "dimension_" + std::to_string(i));
+    }
+    return axes;
+}
+
+void write_readable_artifact(const std::filesystem::path& root,
+                             const Artifact& artifact)
+{
+    const std::vector<std::string> axes = artifact_axes(artifact);
+    std::ostringstream output;
+    output << "# HPU golden data readable view\n"
+           << "# source_binary: " << artifact.path << "\n"
+           << "# role: " << artifact.role << "\n"
+           << "# shape: " << shape_string(artifact.shape) << "\n"
+           << "# encoding: canonical residue, uint64, little-endian in the binary file\n"
+           << "# text_values: fixed-width 64-bit hexadecimal\n"
+           << "# axes: ";
+    for (std::size_t i = 0; i < axes.size(); ++i) {
+        output << (i ? ", " : "") << axes[i] << '=' << artifact.shape[i];
+    }
+    output << "\n# The last axis is stored contiguously; outer axes use row-major order.\n";
+
+    const std::size_t coefficients = artifact.shape.empty() ? artifact.words.size() : artifact.shape.back();
+    const std::size_t blocks = coefficients == 0 ? 0 : artifact.words.size() / coefficients;
+    for (std::size_t block = 0; block < blocks; ++block) {
+        if (artifact.shape.size() > 1) {
+            output << "\n# block ";
+            std::size_t remaining = block;
+            std::vector<std::size_t> coordinates(artifact.shape.size() - 1);
+            for (std::size_t reverse = artifact.shape.size() - 1; reverse > 0; --reverse) {
+                const std::size_t dimension = reverse - 1;
+                coordinates[dimension] = remaining % artifact.shape[dimension];
+                remaining /= artifact.shape[dimension];
+            }
+            for (std::size_t dimension = 0; dimension < coordinates.size(); ++dimension) {
+                output << (dimension ? ", " : "") << axes[dimension]
+                       << '=' << coordinates[dimension];
+            }
+            output << "\n";
+        }
+
+        for (std::size_t offset = 0; offset < coefficients; offset += 8) {
+            const std::size_t end = std::min(offset + 8, coefficients);
+            output << std::dec << std::setw(6) << std::setfill('0') << offset
+                   << '-' << std::setw(6) << (end - 1) << ":";
+            for (std::size_t coefficient = offset; coefficient < end; ++coefficient) {
+                const U64 value = artifact.words[block * coefficients + coefficient];
+                output << " 0x" << std::hex << std::setw(16) << std::setfill('0') << value;
+            }
+            output << '\n';
+        }
+    }
+
+    write_text(root / readable_path(artifact.path), output.str());
+}
+
+void write_case_package(const std::filesystem::path& suite_root,
+                        const std::string& case_name,
+                        const std::string& params,
+                        std::vector<Artifact> artifacts)
+{
+    const std::filesystem::path root = suite_root / case_name / "test_data";
+    for (Artifact& artifact : artifacts) {
+        write_binary(root / artifact.path, artifact.words);
+        write_readable_artifact(root, artifact);
+    }
+
+    std::ostringstream manifest;
+    manifest << "path,readable_path,role,shape,elements,bytes,fnv1a64\n";
+    for (const Artifact& artifact : artifacts) {
+        manifest << csv_field(artifact.path) << ','
+                 << csv_field(readable_path(artifact.path).string()) << ','
+                 << csv_field(artifact.role) << ','
+                 << csv_field(shape_string(artifact.shape)) << ',' << artifact.words.size()
+                 << ',' << artifact.words.size() * sizeof(U64) << ','
+                 << hex64(artifact.checksum) << '\n';
+    }
+    write_text(root / "params.json", params);
+    write_text(root / "artifact_manifest.csv", manifest.str());
+    write_text(root / "README.md",
+               "This UT package is generated from the same deterministic N=4096 FHE "
+               "reference used by ciphertext_multiply. Binary values are little-endian "
+               "uint64 canonical residues. Every binary has a complete annotated `.hex.txt` "
+               "view with block coordinates. Shape and checksum information is in "
+               "artifact_manifest.csv. Hardware-specific twiddle/mod_ctx packing and DMA "
+               "addresses remain subject to the backend ABI.\n");
+}
+
+U64 align_up(U64 value, U64 alignment)
+{
+    return (value + alignment - 1) / alignment * alignment;
+}
+
+void verify_equal(const BasisPoly& left, const BasisPoly& right, const std::string& label)
+{
+    if (left != right) {
+        throw std::runtime_error(label + " mismatch");
+    }
+}
+
+void generate(const std::filesystem::path& output_root,
+              const std::filesystem::path* suite_root)
+{
+    const U64 order = static_cast<U64>(2 * kN);
+    std::vector<U64> q_moduli;
+    std::vector<U64> p_moduli;
+    U64 next = 50000000;
+    for (std::size_t i = 0; i < kNumQ; ++i) {
+        const U64 prime = find_ntt_prime(next, order);
+        q_moduli.push_back(prime);
+        next = prime + order;
+    }
+    next = 90000000;
+    for (std::size_t i = 0; i < kNumP; ++i) {
+        const U64 prime = find_ntt_prime(next, order);
+        p_moduli.push_back(prime);
+        next = prime + order;
+    }
+
+    std::vector<U64> all_moduli = q_moduli;
+    all_moduli.insert(all_moduli.end(), p_moduli.begin(), p_moduli.end());
+    std::vector<U64> all_roots;
+    for (U64 modulus : all_moduli) {
+        all_roots.push_back(find_primitive_2n_root(modulus, kN));
+    }
+    const std::vector<U64> q_roots(all_roots.begin(), all_roots.begin() + kNumQ);
+
+    std::mt19937_64 rng(kSeed);
+    std::vector<std::int64_t> secret_small(kN);
+    std::vector<std::int64_t> message_a(kN);
+    std::vector<std::int64_t> message_b(kN);
+    for (std::size_t i = 0; i < kN; ++i) {
+        secret_small[i] = static_cast<std::int64_t>(rng() % 3) - 1;
+        message_a[i] = static_cast<std::int64_t>((3 * i + 1) % 7) - 3;
+        message_b[i] = static_cast<std::int64_t>((5 * i + 2) % 7) - 3;
+    }
+
+    const BasisPoly secret_q = encode_basis(secret_small, q_moduli);
+    const BasisPoly secret_qp = encode_basis(secret_small, all_moduli);
+    Ciphertext ct_a = encrypt_test_message(message_a, secret_q, q_moduli, q_roots, rng);
+    Ciphertext ct_b = encrypt_test_message(message_b, secret_q, q_moduli, q_roots, rng);
+
+    Ciphertext ct_a_ntt;
+    Ciphertext ct_b_ntt;
+    for (std::size_t component = 0; component < 2; ++component) {
+        ct_a_ntt[component] = transform_basis(ct_a[component], q_moduli, q_roots, false);
+        ct_b_ntt[component] = transform_basis(ct_b[component], q_moduli, q_roots, false);
+    }
+    const BasisPoly plaintext_b_q = encode_basis(message_b, q_moduli);
+    const BasisPoly plaintext_b_ntt = transform_basis(
+        plaintext_b_q, q_moduli, q_roots, false);
+    Ciphertext pmult_ntt;
+    for (std::size_t component = 0; component < 2; ++component) {
+        pmult_ntt[component].resize(kNumQ);
+        for (std::size_t basis = 0; basis < kNumQ; ++basis) {
+            pmult_ntt[component][basis] = pointwise_mul(
+                ct_a_ntt[component][basis], plaintext_b_ntt[basis], q_moduli[basis]);
+        }
+    }
+
+    TensorCiphertext tensor_ntt;
+    for (BasisPoly& component : tensor_ntt) {
+        component.resize(kNumQ);
+    }
+    for (std::size_t basis = 0; basis < kNumQ; ++basis) {
+        const U64 modulus = q_moduli[basis];
+        tensor_ntt[0][basis] = pointwise_mul(ct_a_ntt[0][basis], ct_b_ntt[0][basis], modulus);
+        tensor_ntt[2][basis] = pointwise_mul(ct_a_ntt[1][basis], ct_b_ntt[1][basis], modulus);
+        tensor_ntt[1][basis] = add_poly(
+            pointwise_mul(ct_a_ntt[0][basis], ct_b_ntt[1][basis], modulus),
+            pointwise_mul(ct_a_ntt[1][basis], ct_b_ntt[0][basis], modulus),
+            modulus);
+    }
+
+    TensorCiphertext tensor;
+    for (std::size_t component = 0; component < 3; ++component) {
+        tensor[component] = transform_basis(tensor_ntt[component], q_moduli, q_roots, true);
+    }
+
+    const std::size_t digit_size = kNumQ / kDnum;
+    std::vector<std::array<BasisPoly, 2>> rlk(kDnum);
+    std::vector<std::array<BasisPoly, 2>> rlk_ntt(kDnum);
+    BasisPoly secret_squared_qp(all_moduli.size());
+    for (std::size_t basis = 0; basis < all_moduli.size(); ++basis) {
+        secret_squared_qp[basis] = negacyclic_mul(
+            secret_qp[basis], secret_qp[basis], all_moduli[basis], all_roots[basis]);
+    }
+
+    for (std::size_t digit = 0; digit < kDnum; ++digit) {
+        const std::vector<U64> gadget = crt_digit_factors(
+            q_moduli, digit * digit_size, digit_size, all_moduli);
+        std::vector<std::int64_t> r_small(kN);
+        for (std::int64_t& value : r_small) {
+            value = static_cast<std::int64_t>(rng() % 7) - 3;
+        }
+        for (BasisPoly& component : rlk[digit]) {
+            component.resize(all_moduli.size());
+        }
+        for (std::size_t basis = 0; basis < all_moduli.size(); ++basis) {
+            const U64 modulus = all_moduli[basis];
+            const U64 p_modulus = product_mod(p_moduli, modulus);
+            Poly a = scalar_poly(encode_signed(r_small, modulus), p_modulus, modulus);
+            const Poly a_times_s = negacyclic_mul(a, secret_qp[basis], modulus, all_roots[basis]);
+            const Poly target = scalar_poly(
+                secret_squared_qp[basis], mul_mod(p_modulus, gadget[basis], modulus), modulus);
+            rlk[digit][0][basis] = sub_poly(target, a_times_s, modulus);
+            rlk[digit][1][basis] = std::move(a);
+        }
+        for (std::size_t component = 0; component < 2; ++component) {
+            rlk_ntt[digit][component] = transform_basis(
+                rlk[digit][component], all_moduli, all_roots, false);
+        }
+    }
+
+    std::vector<BasisPoly> modup_coeff(kDnum);
+    std::vector<BasisPoly> modup_ntt(kDnum);
+    std::array<BasisPoly, 2> keyswitch_ntt;
+    for (BasisPoly& component : keyswitch_ntt) {
+        component.assign(all_moduli.size(), Poly(kN, 0));
+    }
+    for (std::size_t digit = 0; digit < kDnum; ++digit) {
+        modup_coeff[digit] = hybrid_modup(
+            tensor[2], q_moduli, all_moduli, digit * digit_size, digit_size);
+        modup_ntt[digit] = transform_basis(modup_coeff[digit], all_moduli, all_roots, false);
+        for (std::size_t component = 0; component < 2; ++component) {
+            for (std::size_t basis = 0; basis < all_moduli.size(); ++basis) {
+                keyswitch_ntt[component][basis] = add_poly(
+                    keyswitch_ntt[component][basis],
+                    pointwise_mul(modup_ntt[digit][basis],
+                                  rlk_ntt[digit][component][basis],
+                                  all_moduli[basis]),
+                    all_moduli[basis]);
+            }
+        }
+    }
+
+    std::array<BasisPoly, 2> keyswitch_qp;
+    std::array<BasisPoly, 2> keyswitch_q;
+    for (std::size_t component = 0; component < 2; ++component) {
+        keyswitch_qp[component] = transform_basis(
+            keyswitch_ntt[component], all_moduli, all_roots, true);
+        keyswitch_q[component] = moddown(keyswitch_qp[component], q_moduli, p_moduli);
+    }
+
+    Ciphertext output;
+    for (std::size_t basis = 0; basis < kNumQ; ++basis) {
+        output[0].push_back(add_poly(tensor[0][basis], keyswitch_q[0][basis], q_moduli[basis]));
+        output[1].push_back(add_poly(tensor[1][basis], keyswitch_q[1][basis], q_moduli[basis]));
+    }
+
+    const BasisPoly tensor_decrypted = decrypt_tensor(tensor, secret_q, q_moduli, q_roots);
+    const BasisPoly output_decrypted = decrypt_ciphertext(output, secret_q, q_moduli, q_roots);
+    verify_equal(tensor_decrypted, output_decrypted, "relinearized ciphertext decryption");
+
+    const std::vector<std::int64_t> expected_plain = plaintext_product(message_a, message_b);
+    std::vector<U64> expected_plain_mod_t(kN);
+    std::vector<U64> decrypted_plain_mod_t(kN);
+    for (std::size_t i = 0; i < kN; ++i) {
+        const std::int64_t expected = expected_plain[i];
+        const std::int64_t expected_mod = ((expected % static_cast<std::int64_t>(kPlainModulus))
+            + static_cast<std::int64_t>(kPlainModulus)) % static_cast<std::int64_t>(kPlainModulus);
+        expected_plain_mod_t[i] = static_cast<U64>(expected_mod);
+
+        const U64 residue = output_decrypted[0][i];
+        const std::int64_t centered = residue > q_moduli[0] / 2
+            ? static_cast<std::int64_t>(residue) - static_cast<std::int64_t>(q_moduli[0])
+            : static_cast<std::int64_t>(residue);
+        const std::int64_t decoded = ((centered % static_cast<std::int64_t>(kPlainModulus))
+            + static_cast<std::int64_t>(kPlainModulus)) % static_cast<std::int64_t>(kPlainModulus);
+        decrypted_plain_mod_t[i] = static_cast<U64>(decoded);
+    }
+    if (decrypted_plain_mod_t != expected_plain_mod_t) {
+        throw std::runtime_error("plaintext multiplication check failed");
+    }
+
+    std::vector<Artifact> artifacts;
+    std::vector<U64> words;
+    append_words(words, ct_a[0]); append_words(words, ct_a[1]);
+    add_artifact(artifacts, "input/ct_a_q.bin", "ciphertext A, coefficient domain",
+                 {2, kNumQ, kN}, std::move(words),
+                 {"component[c0,c1]", "basis_q", "coefficient"});
+    words.clear(); append_words(words, ct_b[0]); append_words(words, ct_b[1]);
+    add_artifact(artifacts, "input/ct_b_q.bin", "ciphertext B, coefficient domain",
+                 {2, kNumQ, kN}, std::move(words),
+                 {"component[c0,c1]", "basis_q", "coefficient"});
+    words.clear(); append_words(words, secret_q);
+    add_artifact(artifacts, "input/secret_key_q.bin", "test-only secret key",
+                 {kNumQ, kN}, std::move(words), {"basis_q", "coefficient"});
+    add_artifact(artifacts, "input/message_a_mod_t.bin", "plaintext A",
+                 {kN}, encode_signed(message_a, kPlainModulus));
+    add_artifact(artifacts, "input/message_b_mod_t.bin", "plaintext B",
+                 {kN}, encode_signed(message_b, kPlainModulus));
+
+    words.clear();
+    for (const auto& digit : rlk_ntt) {
+        append_words(words, digit[0]); append_words(words, digit[1]);
+    }
+    add_artifact(artifacts, "constants/relinearization_key_ntt_qp.bin",
+                 "rlk[digit][component][Q then P][coefficient]",
+                 {kDnum, 2, kNumQ + kNumP, kN}, std::move(words),
+                 {"digit", "component[ks0,ks1]", "basis_q_then_p", "coefficient"});
+
+    words.clear(); append_words(words, ct_a_ntt[0]); append_words(words, ct_a_ntt[1]);
+    append_words(words, ct_b_ntt[0]); append_words(words, ct_b_ntt[1]);
+    add_artifact(artifacts, "expected/inputs_ntt_q.bin", "NTT(A0,A1,B0,B1)",
+                 {4, kNumQ, kN}, std::move(words),
+                 {"input_component[A0,A1,B0,B1]", "basis_q", "coefficient"});
+    words.clear();
+    for (const BasisPoly& component : tensor_ntt) append_words(words, component);
+    add_artifact(artifacts, "expected/tensor_ntt_q.bin", "t0,t1,t2 in NTT domain",
+                 {3, kNumQ, kN}, std::move(words),
+                 {"tensor_component[t0,t1,t2]", "basis_q", "coefficient"});
+    words.clear();
+    for (const BasisPoly& component : tensor) append_words(words, component);
+    add_artifact(artifacts, "expected/tensor_coeff_q.bin", "t0,t1,t2 in coefficient domain",
+                 {3, kNumQ, kN}, std::move(words),
+                 {"tensor_component[t0,t1,t2]", "basis_q", "coefficient"});
+    words.clear(); for (const BasisPoly& digit : modup_coeff) append_words(words, digit);
+    add_artifact(artifacts, "expected/modup_t2_coeff_qp.bin", "ModUp(t2 digit) coefficient domain",
+                 {kDnum, kNumQ + kNumP, kN}, std::move(words),
+                 {"digit", "basis_q_then_p", "coefficient"});
+    words.clear(); for (const BasisPoly& digit : modup_ntt) append_words(words, digit);
+    add_artifact(artifacts, "expected/modup_t2_ntt_qp.bin", "ModUp(t2 digit) NTT domain",
+                 {kDnum, kNumQ + kNumP, kN}, std::move(words),
+                 {"digit", "basis_q_then_p", "coefficient"});
+    words.clear(); append_words(words, keyswitch_ntt[0]); append_words(words, keyswitch_ntt[1]);
+    add_artifact(artifacts, "expected/keyswitch_accum_ntt_qp.bin", "key-switch accumulators, NTT domain",
+                 {2, kNumQ + kNumP, kN}, std::move(words),
+                 {"component[ks0,ks1]", "basis_q_then_p", "coefficient"});
+    words.clear(); append_words(words, keyswitch_qp[0]); append_words(words, keyswitch_qp[1]);
+    add_artifact(artifacts, "expected/keyswitch_coeff_qp.bin", "key-switch accumulators, coefficient domain",
+                 {2, kNumQ + kNumP, kN}, std::move(words),
+                 {"component[ks0,ks1]", "basis_q_then_p", "coefficient"});
+    words.clear(); append_words(words, keyswitch_q[0]); append_words(words, keyswitch_q[1]);
+    add_artifact(artifacts, "expected/keyswitch_moddown_q.bin", "ModDown key-switch result",
+                 {2, kNumQ, kN}, std::move(words),
+                 {"component[ks0,ks1]", "basis_q", "coefficient"});
+    words.clear(); append_words(words, output[0]); append_words(words, output[1]);
+    add_artifact(artifacts, "expected/ciphertext_out_q.bin", "relinearized ciphertext output",
+                 {2, kNumQ, kN}, std::move(words),
+                 {"component[c0,c1]", "basis_q", "coefficient"});
+    words.clear(); append_words(words, output_decrypted);
+    add_artifact(artifacts, "expected/decrypted_ring_q.bin", "test-only decrypted ring product",
+                 {kNumQ, kN}, std::move(words), {"basis_q", "coefficient"});
+    add_artifact(artifacts, "expected/plaintext_product_mod_t.bin", "expected plaintext product",
+                 {kN}, std::move(expected_plain_mod_t));
+
+    for (Artifact& artifact : artifacts) {
+        write_binary(output_root / artifact.path, artifact.words);
+        write_readable_artifact(output_root, artifact);
+    }
+
+    std::ostringstream params;
+    params << "{\n"
+           << "  \"format_version\": 1,\n"
+           << "  \"algorithm\": \"RLWE-RNS hybrid relinearization\",\n"
+           << "  \"ring\": \"Z_m[x]/(x^N+1)\",\n"
+           << "  \"N\": " << kN << ",\n"
+           << "  \"num_q\": " << kNumQ << ",\n"
+           << "  \"num_p\": " << kNumP << ",\n"
+           << "  \"dnum\": " << kDnum << ",\n"
+           << "  \"plaintext_modulus\": " << kPlainModulus << ",\n"
+           << "  \"seed\": \"" << hex64(kSeed) << "\",\n"
+           << "  \"basis_order\": \"Q[0..3],P[0..2]\",\n"
+           << "  \"coefficient_encoding\": \"uint64 little-endian canonical residue\",\n"
+           << "  \"ntt_convention\": \"negacyclic twist, DIT cyclic NTT, natural-order output\",\n"
+           << "  \"evaluation_key_noise\": 0,\n"
+           << "  \"evaluation_key_fixture\": \"P-divisible exact functional key\",\n"
+           << "  \"security_status\": \"FUNCTIONAL_TEST_ONLY\",\n"
+           << "  \"q\": [";
+    for (std::size_t i = 0; i < q_moduli.size(); ++i) params << (i ? ", " : "") << q_moduli[i];
+    params << "],\n  \"p\": [";
+    for (std::size_t i = 0; i < p_moduli.size(); ++i) params << (i ? ", " : "") << p_moduli[i];
+    params << "],\n  \"psi_2n\": [";
+    for (std::size_t i = 0; i < all_roots.size(); ++i) params << (i ? ", " : "") << all_roots[i];
+    params << "]\n}\n";
+    write_text(output_root / "params.json", params.str());
+
+    std::ostringstream manifest;
+    manifest << "path,readable_path,role,shape,elements,bytes,fnv1a64\n";
+    for (const Artifact& artifact : artifacts) {
+        manifest << csv_field(artifact.path) << ','
+                 << csv_field(readable_path(artifact.path).string()) << ','
+                 << csv_field(artifact.role) << ','
+                 << csv_field(shape_string(artifact.shape))
+                 << ',' << artifact.words.size() << ',' << artifact.words.size() * sizeof(U64)
+                 << ',' << hex64(artifact.checksum) << '\n';
+    }
+    write_text(output_root / "artifact_manifest.csv", manifest.str());
+
+    U64 address = 0x10000000ULL;
+    std::ostringstream memory_map;
+    memory_map << "{\n  \"status\": \"PROVISIONAL_LOGICAL_MAP_REQUIRES_RTL_ABI_CONFIRMATION\",\n"
+               << "  \"base_address\": \"0x10000000\",\n"
+               << "  \"alignment_bytes\": 64,\n  \"regions\": [\n";
+    for (std::size_t i = 0; i < artifacts.size(); ++i) {
+        const Artifact& artifact = artifacts[i];
+        address = align_up(address, 64);
+        memory_map << "    {\"name\": \"" << artifact.path << "\", \"address\": \""
+                   << hex64(address) << "\", \"bytes\": " << artifact.words.size() * sizeof(U64)
+                   << ", \"shape\": \"" << shape_string(artifact.shape) << "\"}"
+                   << (i + 1 == artifacts.size() ? "\n" : ",\n");
+        address += artifact.words.size() * sizeof(U64);
+    }
+    memory_map << "  ],\n"
+               << "  \"hardware_fields_pending\": [\"mod_ctx packing\", \"twiddle packing\", "
+                  "\"DMA length unit\", \"scratch allocation\", \"host-visible completion\"]\n}\n";
+    write_text(output_root / "memory_map.json", memory_map.str());
+
+    const std::string dma_plan =
+        "phase,operation,logical_object,domain,basis,status\n"
+        "input,dload,ct_a_q,coefficient,Q,READY\n"
+        "input,dload,ct_b_q,coefficient,Q,READY\n"
+        "transform,pntt,ct_a_and_ct_b,NTT,Q,READY_MATH_LAYOUT_PENDING\n"
+        "tensor,pmul_pmac,t0_t1_t2,NTT,Q,READY\n"
+        "relinearize,bconv,t2_digits,coefficient,Q_to_QP,READY\n"
+        "relinearize,pntt,t2_digits,NTT,QP,READY_MATH_LAYOUT_PENDING\n"
+        "relinearize,pmul_pmac,rlk_and_t2_digits,NTT,QP,READY\n"
+        "relinearize,pintt,keyswitch_accum,coefficient,QP,READY_MATH_LAYOUT_PENDING\n"
+        "relinearize,moddown,keyswitch_accum,coefficient,QP_to_Q,READY\n"
+        "output,dstore,ciphertext_out_q,coefficient,Q,READY\n";
+    write_text(output_root / "dma_plan.csv", dma_plan);
+
+    const std::string readme =
+        "# Ciphertext Multiply Golden Package\n\n"
+        "This directory is generated by `hpu_reference_vectors`. It is a deterministic, "
+        "algorithm-level RLWE/RNS multiplication and hybrid relinearization fixture for "
+        "`N=4096, Q=4, P=3, dnum=2`.\n\n"
+        "Binary files contain canonical residues as little-endian uint64 values. Every binary "
+        "has a complete annotated `.hex.txt` view. Dimensions, readable paths, and checksums "
+        "are listed in `artifact_manifest.csv`; basis order is Q followed by P.\n\n"
+        "The validation path is: encrypt two test messages, NTT, three-component tensor "
+        "product, INTT, digit ModUp to Q union P, NTT, multiply by the relinearization key, "
+        "INTT, ModDown by P, compose the two-component ciphertext, decrypt, and compare with "
+        "negacyclic plaintext multiplication modulo t.\n\n"
+        "The key and ciphertext use zero test noise and a P-divisible functional evaluation "
+        "key so failures are bit-exact and easy to localize. They are not security test vectors. "
+        "`memory_map.json` is a proposed logical "
+        "DDR map only; RTL owners must confirm DMA length units, mod_ctx/twiddle packing, "
+        "scratch addresses, and completion semantics before direct hardware execution.\n";
+    write_text(output_root / "README.md", readme);
+    write_text(output_root / "VALIDATION.txt",
+               "PASS\nrelinearized_decryption == tensor_decryption\n"
+               "decoded_plaintext == negacyclic(message_a * message_b) mod 257\n");
+
+    if (suite_root != nullptr) {
+        const auto common_params = [&](const std::string& operation,
+                                       const std::string& input_domain,
+                                       const std::string& output_domain,
+                                       const std::vector<U64>& moduli) {
+            std::ostringstream out;
+            out << "{\n  \"format_version\": 1,\n  \"operation\": \"" << operation
+                << "\",\n  \"N\": " << kN << ",\n  \"input_domain\": \""
+                << input_domain << "\",\n  \"output_domain\": \"" << output_domain
+                << "\",\n  \"layout\": \"row-major, coefficient last, little-endian uint64\",\n"
+                << "  \"moduli\": [";
+            for (std::size_t i = 0; i < moduli.size(); ++i) {
+                out << (i ? ", " : "") << moduli[i];
+            }
+            out << "]\n}\n";
+            return out.str();
+        };
+
+        std::vector<Artifact> case_artifacts;
+        add_artifact(case_artifacts, "input.bin", "NTT input, coefficient domain",
+                     {kN}, ct_a[0][0]);
+        add_artifact(case_artifacts, "expected.bin", "NTT expected output, NTT domain",
+                     {kN}, ct_a_ntt[0][0]);
+        write_case_package(*suite_root, "ntt",
+                           common_params("ntt", "coefficient", "NTT", {q_moduli[0]}),
+                           std::move(case_artifacts));
+
+        case_artifacts.clear();
+        add_artifact(case_artifacts, "input.bin", "INTT input, NTT domain",
+                     {kN}, ct_a_ntt[0][0]);
+        add_artifact(case_artifacts, "expected.bin", "INTT expected output, coefficient domain",
+                     {kN}, ct_a[0][0]);
+        write_case_package(*suite_root, "intt",
+                           common_params("intt", "NTT", "coefficient", {q_moduli[0]}),
+                           std::move(case_artifacts));
+
+        case_artifacts.clear();
+        add_artifact(case_artifacts, "input_a.bin", "left polynomial", {kN}, ct_a_ntt[0][0]);
+        add_artifact(case_artifacts, "input_b.bin", "right polynomial", {kN}, ct_b_ntt[0][0]);
+        add_artifact(case_artifacts, "expected.bin", "pointwise product", {kN}, tensor_ntt[0][0]);
+        write_case_package(*suite_root, "mm",
+                           common_params("mm", "NTT", "NTT", {q_moduli[0]}),
+                           std::move(case_artifacts));
+
+        case_artifacts.clear();
+        add_artifact(case_artifacts, "input_q.bin", "single Q limb", {kN}, tensor[2][0]);
+        const BasisPoly bconv_source{tensor[2][0]};
+        add_artifact(case_artifacts, "expected_p.bin", "Q0 to P0 basis conversion", {kN},
+                     bconv_to_target(bconv_source, {q_moduli[0]}, p_moduli[0]));
+        write_case_package(*suite_root, "bconv",
+                           common_params("bconv", "coefficient/Q0", "coefficient/P0",
+                                         {q_moduli[0], p_moduli[0]}),
+                           case_artifacts);
+        write_case_package(*suite_root, "modup",
+                           common_params("modup", "coefficient/Q0", "coefficient/P0",
+                                         {q_moduli[0], p_moduli[0]}),
+                           std::move(case_artifacts));
+
+        case_artifacts.clear();
+        words.clear(); append_words(words, ct_a_ntt[0]); append_words(words, ct_a_ntt[1]);
+        add_artifact(case_artifacts, "ciphertext_ntt_q.bin", "input ciphertext",
+                     {2, kNumQ, kN}, std::move(words),
+                     {"component[c0,c1]", "basis_q", "coefficient"});
+        words.clear(); append_words(words, plaintext_b_ntt);
+        add_artifact(case_artifacts, "plaintext_ntt_q.bin", "input plaintext",
+                     {kNumQ, kN}, std::move(words), {"basis_q", "coefficient"});
+        words.clear(); append_words(words, pmult_ntt[0]); append_words(words, pmult_ntt[1]);
+        add_artifact(case_artifacts, "expected_ntt_q.bin", "plaintext-ciphertext product",
+                     {2, kNumQ, kN}, std::move(words),
+                     {"component[c0,c1]", "basis_q", "coefficient"});
+        write_case_package(*suite_root, "pmult",
+                           common_params("pmult", "NTT/Q", "NTT/Q", q_moduli),
+                           std::move(case_artifacts));
+
+        case_artifacts.clear();
+        words.clear(); append_words(words, ct_a_ntt[0]); append_words(words, ct_a_ntt[1]);
+        append_words(words, ct_b_ntt[0]); append_words(words, ct_b_ntt[1]);
+        add_artifact(case_artifacts, "input_ntt_q.bin", "A0,A1,B0,B1",
+                     {4, kNumQ, kN}, std::move(words),
+                     {"input_component[A0,A1,B0,B1]", "basis_q", "coefficient"});
+        words.clear(); for (const BasisPoly& component : tensor_ntt) append_words(words, component);
+        add_artifact(case_artifacts, "expected_ntt_q.bin", "t0,t1,t2",
+                     {3, kNumQ, kN}, std::move(words),
+                     {"tensor_component[t0,t1,t2]", "basis_q", "coefficient"});
+        write_case_package(*suite_root, "cmult",
+                           common_params("cmult", "NTT/Q", "NTT/Q", q_moduli),
+                           std::move(case_artifacts));
+
+        case_artifacts.clear();
+        words.clear(); append_words(words, keyswitch_qp[0]);
+        add_artifact(case_artifacts, "input_qp.bin", "key-switch component before ModDown",
+                     {kNumQ + kNumP, kN}, std::move(words),
+                     {"basis_q_then_p", "coefficient"});
+        words.clear(); append_words(words, keyswitch_q[0]);
+        add_artifact(case_artifacts, "expected_q.bin", "key-switch component after ModDown",
+                     {kNumQ, kN}, std::move(words), {"basis_q", "coefficient"});
+        write_case_package(*suite_root, "moddown",
+                           common_params("moddown", "coefficient/QP", "coefficient/Q", all_moduli),
+                           std::move(case_artifacts));
+
+        case_artifacts.clear();
+        words.clear(); append_words(words, tensor[2]);
+        add_artifact(case_artifacts, "input_t2_q.bin", "tensor component t2",
+                     {kNumQ, kN}, std::move(words), {"basis_q", "coefficient"});
+        words.clear();
+        for (const auto& digit : rlk_ntt) { append_words(words, digit[0]); append_words(words, digit[1]); }
+        add_artifact(case_artifacts, "rlk_ntt_qp.bin", "relinearization key",
+                     {kDnum, 2, kNumQ + kNumP, kN}, std::move(words),
+                     {"digit", "component[ks0,ks1]", "basis_q_then_p", "coefficient"});
+        words.clear(); append_words(words, keyswitch_q[0]); append_words(words, keyswitch_q[1]);
+        add_artifact(case_artifacts, "expected_q.bin", "KeySwitch(t2) components",
+                     {2, kNumQ, kN}, std::move(words),
+                     {"component[ks0,ks1]", "basis_q", "coefficient"});
+        write_case_package(*suite_root, "keyswitch",
+                           common_params("keyswitch", "coefficient/Q + rlk/NTT/QP",
+                                         "coefficient/Q", all_moduli),
+                           std::move(case_artifacts));
+
+        write_text(*suite_root / "auto" / "test_data" / "STATUS.md",
+                   "BLOCKED: auto.asm still uses symbolic DMA registers. Physical register "
+                   "allocation, automorphism index layout, and DMA ABI must be fixed before "
+                   "a bit-exact executable UT package can be issued.\n");
+    }
+
+    std::cout << "Generated " << artifacts.size() << " binary artifacts in " << output_root << '\n';
+    std::cout << "FHE reference validation: PASS\n";
+}
+
+} // namespace
+
+int main(int argc, char* argv[])
+{
+    try {
+        const std::filesystem::path output = argc > 1
+            ? std::filesystem::path(argv[1])
+            : std::filesystem::path("outputs/ciphertext_multiply/test_data");
+        const std::filesystem::path suite = argc > 2
+            ? std::filesystem::path(argv[2])
+            : std::filesystem::path();
+        generate(output, argc > 2 ? &suite : nullptr);
+        return 0;
+    } catch (const std::exception& exception) {
+        std::cerr << "Reference generation failed: " << exception.what() << '\n';
+        return 1;
+    }
+}
