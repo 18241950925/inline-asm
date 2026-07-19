@@ -94,16 +94,24 @@ outputs/<case>/
     ├── params.json
     ├── artifact_manifest.csv
     ├── *.bin
-    └── *.hex.txt
+    ├── *.hex.txt
+    └── hardware/
+        ├── hpu_mem_image.u32.bin
+        ├── hpu_mem_config.json
+        ├── line_map.csv
+        ├── mod_ctx_map.csv
+        ├── twiddle_map.csv
+        ├── constants/
+        └── images/
 ```
 
-具体文件名随算子变化。`.bin` 是硬件加载使用的小端 `uint64_t` 规范剩余数数组；每个二进制均有带用途、shape、维度和分块注释的 `.hex.txt` 人工可读版本。`artifact_manifest.csv` 记录路径、shape、字节数与校验值。
+具体文件名随算子变化。顶层 `.bin` 是小端 `uint64_t` 数学 golden，不直接作为 HPU load image；`hardware/` 下的 `.u32.bin` 才是 64×32-bit、每 line 256B 的硬件镜像。两类数据都有带用途、shape 和分块注释的 `.hex.txt` 人工可读版本；两个 manifest 分别记录逻辑 golden 与物理镜像的大小和校验值。
 
 当前覆盖目录包括 `ntt`、`intt`、`mm`、`bconv`、`pmult`、`cmult`、`modup`、`moddown`、`keyswitch`、`auto`、`ciphertext_multiply` 和 `rv_interface_smoke`。
 
 完整密文乘法目录额外包含：
 
-- `memory_map.json`：待 RTL/DMA ABI 确认的建议逻辑地址映射。
+- `memory_map.json`：指向完整 HPU_MEM 镜像、256B line map 和 window 配置。
 - `dma_plan.csv`：各 FHE 阶段的输入、输出、域和基顺序。
 - `VALIDATION.txt`：解密一致性与阶段验证结果。
 - `input/`、`constants/`、`expected/`：密文、重线性化密钥和中间/最终 golden。
@@ -126,14 +134,14 @@ outputs/<case>/
 - `src/main.cpp`：HPU 指令流生成参数。
 - `test/reference/main.cpp`：FHE reference 和测试向量参数。
 
-`outputs/*/test_data/params.json` 是生成结果，不是输入配置，重新生成时会覆盖。修改 `N/Q/P/dnum` 时需同步修改上述两处，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 8` 等当前实现约束。默认完整乘法参数为 `N=4096, Q=4, P=3, dnum=2`。
+`outputs/*/test_data/params.json` 是生成结果，不是输入配置，重新生成时会覆盖。修改 `N/Q/P/dnum` 时需同步修改上述两处，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 8`、所有 RNS 模数不超过 32 bit 等当前实现约束。默认完整乘法参数为 `N=4096, Q=4, P=3, dnum=2`。
 
 ## 7. 当前交付边界
 
 软件侧已经完成指令生成、`.inst32` 编码、完整密文乘法与重线性化 reference、算子 UT 数据和 RV 接口冒烟流。以下信息仍需硬件侧确认后才能把当前计算顺序流变成可直接执行程序：
 
 1. `dload/dstore` 的 DDR 地址寄存器和偏移 ABI；当前完整乘法中仍使用 `x0/x0` 占位。
-2. `mod_ctx`、NTT twiddle、shuffle 配置和评估密钥的物理打包格式。
+2. HPU_MEM CSR 数字偏移、`line_map.csv` 到指令 `rs1/rs2` 的 runtime 绑定，以及 RTL 对 V1 `mod_ctx`/DIT twiddle ABI 的签字。
 3. HPU SRAM/scratch 容量、对象槽位驻留规则与覆盖时机。
 4. DMA 完成、`psync`、指令发射和异常处理的精确关系。
 

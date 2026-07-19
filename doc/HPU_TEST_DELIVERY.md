@@ -20,10 +20,14 @@ FHE_REFERENCE=PASS
 ASM_ENCODING=PASS
 RV_INTERFACE_SMOKE=PASS
 OPERATOR_UT_PACKAGES=PASS
+HARDWARE_UINT32_IMAGES=PASS
+HPU_LINE_LAYOUT_256B=PASS
+MOD_CTX_BARRETT=PASS
+STAGE_TWIDDLE_LAYOUT=PASS
 HARDWARE_EXECUTION=CONDITIONAL
 ```
 
-`HARDWARE_EXECUTION=CONDITIONAL` 不是算法失败，而是提醒联调人员：RTL 尚需确认 DMA 地址 ABI、`mod_ctx`/twiddle 打包、scratch 地址和 DMA 完成语义。确认这些字段前，当前 `.inst32` 中的 `dload/dstore x0,x0` 只能作为计算顺序流，不能直接当成最终可运行程序。
+`HARDWARE_EXECUTION=CONDITIONAL` 不是算法或数据失败。`uint32` 镜像、256B line、`mod_ctx` 和 twiddle 已生成；剩余条件是 RTL/runtime 仍需确认 HPU_MEM CSR 数字偏移、把 line offset/count 装入 `dload/dstore` 的 `rs1/rs2`、分配 scratch，并定义 DMA 完成语义。完成这些绑定前，当前 `.inst32` 中的 `dload/dstore x0,x0` 只能作为计算顺序流。
 
 ## 2. 程序入口与执行顺序
 
@@ -73,16 +77,30 @@ Encrypt(ctA, ctB)
 | --- | --- |
 | `params.json` | 模数、根、环参数、NTT 约定和安全属性 |
 | `artifact_manifest.csv` | 每个二进制及可读文本的路径、shape、字节数和 FNV-1a 校验值 |
-| `memory_map.json` | 建议的逻辑 DDR 地址映射及硬件待确认字段 |
+| `memory_map.json` | 指向 `uint32` HPU_MEM 镜像、256B line map 和剩余联调字段 |
 | `dma_plan.csv` | 各算法阶段的输入、输出、域和基顺序 |
 | `input/*.bin` | 两个输入密文、测试明文和测试私钥 |
 | `constants/*.bin` | `rlk[digit][component][basis][coefficient]` |
 | `expected/*.bin` | NTT、tensor、ModUp、KeySwitch、ModDown 和最终结果检查点 |
 | `VALIDATION.txt` | 软件参考模型最终校验结果 |
 
-所有 `.bin` 均采用 little-endian `uint64_t` canonical residue。多维数组按 C row-major 展平，最后一维始终是 coefficient；基顺序固定为 `Q[0..3]` 后接 `P[0..2]`。
+顶层 `.bin` 均采用 little-endian `uint64_t` canonical residue，只作为数学 golden。多维数组按 C row-major 展平，最后一维始终是 coefficient；基顺序固定为 `Q[0..3]` 后接 `P[0..2]`。
 
 每个 `.bin` 都有同名 `.hex.txt` 人工可读版本，例如 `input.bin` 对应 `input.hex.txt`。文本文件头包含用途、shape、维度含义和编码说明，多维数据按 component/digit/basis 分块，并在每行标注 coefficient 范围。
+
+每个完整乘法包和独立 UT 包还包含 `hardware/`：
+
+| 文件 | 用途 |
+| --- | --- |
+| `hpu_mem_image.u32.bin` | 可整体装入 HPU_MEM window 的连续 `uint32` 镜像 |
+| `images/**/*.u32.bin` | 输入、常量、期望结果的独立 256B-line-padded 镜像 |
+| `line_map.csv` | 每个对象的 byte address、line offset、line count、payload/padded 大小 |
+| `constants/mod_ctx.u32.bin` / `mod_ctx_map.csv` | 每个 Q/P 模数的 q 与 `floor(2^64/q)` Barrett mu 物理记录 |
+| `constants/twiddle/**/*.u32.bin` / `twiddle_map.csv` | 每个 basis、方向、phase、stage 的物理 twiddle 和 line 位置 |
+| `hpu_mem_config.json` | HPU_MEM base/size、256B line 参数和语义 CSR 编程顺序 |
+| `abi.json` | `uint32`、小端、mod context word 布局和 NTT/INTT twiddle 约定 |
+
+硬件模上下文 V1 每条记录占 4 个 `uint32`：`q`、`mu[31:0]`、`mu[63:32]`、保留零。Twiddle 与软件 reference 一致，采用 negacyclic pre-twist、bit reversal、radix-2 DIT stage 幂表；INTT 另提供 `N^-1 * psi^-i` post factor。每个 stage 从新的 256B line 开始，尾部补零。
 
 ## 5. 失败定位
 
@@ -97,7 +115,7 @@ Encrypt(ctA, ctB)
 | `ciphertext_out_q` | 最终 `padd`、输出 component 顺序 |
 | 最终解密 | 上述节点均通过时再检查方案参数和 host 数据解释 |
 
-同一 reference 还会拆分到 `outputs/{ntt,intt,mm,bconv,modup,pmult,cmult,moddown,keyswitch}/test_data/`。每个目录均包含独立 `params.json`、输入、期望输出和带 checksum 的 `artifact_manifest.csv`，可直接交给对应模块负责人跑 UT。`auto` 当前无法完成物理寄存器编码，其阻塞原因记录在 `outputs/auto/test_data/STATUS.md`。
+同一 reference 还会拆分到 `outputs/{ntt,intt,mm,bconv,modup,pmult,cmult,moddown,keyswitch}/test_data/`。每个目录均包含独立 `params.json`、数学输入/期望输出、checksum，以及完整的 `hardware/` 镜像、上下文、twiddle 和 line map，可直接交给对应模块负责人跑 UT。`auto` 当前无法完成物理寄存器编码，其阻塞原因记录在 `outputs/auto/test_data/STATUS.md`。
 
 ## 6. RV 接口用例
 
@@ -112,10 +130,10 @@ Encrypt(ctA, ctB)
 
 ## 7. 硬件联调前置确认
 
-以下五项必须由控制逻辑、SRAM、DMA 和软件负责人共同签字确认，确认后才能把当前交付从“软件可验收”升级为“硬件可直接运行”：
+以下五项必须由控制逻辑、SRAM、DMA 和软件负责人共同签字确认，确认后才能把当前交付从“软件可验收”升级为“硬件可直接运行”。数据包已经给出软件侧 V1 值和布局，签字重点是 RTL 是否按同一 ABI 消费：
 
-1. `rs1` 地址和 `rs2` 长度的单位、对齐、最大值及跨 4 KiB 行为。
-2. `mod_ctx` 中模数、约减常数、NTT 根和逆元的精确位布局。
-3. 每个 `pntt/pintt stage` 消费的 twiddle 次序及 Montgomery 域约定。
+1. HPU_MEM CSR 的数字偏移，以及 runtime 将 `line_map.csv` 的 offset/count 绑定到 `rs1/rs2` 的方式。
+2. RTL 接受 V1 `mod_ctx = {q, mu_lo, mu_hi, reserved}`，Barrett 定点约定为 `mu=floor(2^64/q)`。
+3. RTL 的 `pntt/pintt stage` 接受 `twiddle_map.csv` 的 DIT 次序，或明确给出所需转换；当前数据为 canonical residue，不是 Montgomery 域。
 4. ct、tensor、ModUp、rlk、KeySwitch scratch 的物理地址和生命周期。
 5. DMA 完成、对象可用、`dstore rel` 与 `psync` 中断之间的 happens-before 关系。

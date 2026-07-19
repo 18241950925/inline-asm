@@ -6,8 +6,8 @@
 
 - `src/main.cpp` 通过 `inline_asm_codegen` 生成下述算子的 ASM，仍是 HPU 指令流入口。
 - `test/reference/main.cpp` 通过 `hpu_reference_vectors` 生成对应输入、常量、期望输出和人工可读 `.hex.txt`。
-- 完整密文乘法的逻辑数据地址见 `outputs/ciphertext_multiply/test_data/memory_map.json`，阶段搬运顺序见同目录 `dma_plan.csv`。
-- `memory_map.json` 目前是建议逻辑映射，不是已经确认的 RTL 地址 ABI。指令中的 `x0` 和符号地址寄存器必须在硬件接口确认后替换或重定位。
+- 完整密文乘法的 HPU_MEM 镜像入口见 `outputs/ciphertext_multiply/test_data/memory_map.json`，逐对象 256B line offset/count 见 `hardware/line_map.csv`，阶段搬运顺序见同目录 `dma_plan.csv`。
+- `hardware/hpu_mem_config.json` 已给出 base/size 和语义 CSR 编程顺序；CSR 数字偏移及 `line_map.csv` 到指令 `rs1/rs2` 的寄存器绑定仍需 runtime/RTL 确认。代码中的 `x0` 和符号地址寄存器必须据此替换或重定位。
 
 ## 通用约定
 
@@ -16,6 +16,7 @@
   - `type = poly`：加载多项式/RNS 通道数据或预计算常量（如 twiddle、qhat_inv 等）。
 - 代码中 `x0` / `x_offset` / `x_c0` / `x_ct1_up` / `x_ct1_ntt` / `x_evk` / `x_out` / `x_tmp_c0` 等仅是占位地址寄存器名，测试时需用实际的 DMA/HBM 地址替代。
 - `pmodld` 的 index 仅用于选择在 `pobj` 中的“第几个模上下文”；若上下文在连续内存中，index 与地址偏移需保持一致。
+- 数学 golden 使用 little-endian `uint64`；`dload` 应使用 `test_data/hardware/` 下 little-endian `uint32`、按 256B line 补齐的独立镜像或完整 `hpu_mem_image.u32.bin`。
 
 ---
 
@@ -180,7 +181,7 @@
 | INTT/ModDown | 两个累加分量、Q∪P 常量与 twiddle | Q 基 key-switch correction |
 | 最终合并 | `t0/t1` 与两个 correction | `ciphertext_out_q` |
 
-Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphertext_multiply/test_data/artifact_manifest.csv`。当前生成器中的 `dload("x0", "x0", ...)` / `dstore("x0", "x0", ...)` 只表达数据依赖与计算顺序，尚不携带可执行的 DDR 地址。
+Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphertext_multiply/test_data/artifact_manifest.csv`；硬件 `uint32` 文件、checksum、line offset/count 分别见 `hardware/hardware_manifest.csv` 和 `hardware/line_map.csv`。当前生成器中的 `dload("x0", "x0", ...)` / `dstore("x0", "x0", ...)` 只表达数据依赖与计算顺序，尚未把这些 line 参数写入物理寄存器。
 
 ---
 

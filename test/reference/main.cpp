@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -15,6 +16,7 @@
 namespace {
 
 using U64 = std::uint64_t;
+using U32 = std::uint32_t;
 using U128 = unsigned __int128;
 using I128 = __int128;
 using Poly = std::vector<U64>;
@@ -28,6 +30,10 @@ constexpr std::size_t kNumP = 3;
 constexpr std::size_t kDnum = 2;
 constexpr U64 kPlainModulus = 257;
 constexpr U64 kSeed = 0x4850555f464845ULL;
+constexpr U64 kFnv1a64OffsetBasis = 14695981039346656037ULL;
+constexpr std::size_t kHpuWordsPerLine = 64;
+constexpr U64 kHpuLineBytes = kHpuWordsPerLine * sizeof(U32);
+constexpr U64 kHpuMemBase = 0x10000000ULL;
 
 struct Artifact {
     std::string path;
@@ -36,6 +42,29 @@ struct Artifact {
     std::vector<U64> words;
     std::vector<std::string> axes;
     U64 checksum = 0;
+};
+
+struct HardwareImage {
+    std::string path;
+    std::string role;
+    std::vector<std::size_t> shape;
+    std::vector<U32> payload_words;
+    std::vector<U32> padded_words;
+    U64 line_offset = 0;
+    U64 payload_checksum = 0;
+    U64 image_checksum = 0;
+};
+
+struct TwiddleMapEntry {
+    std::string direction;
+    std::size_t basis = 0;
+    U64 modulus = 0;
+    std::string phase;
+    int stage = -1;
+    std::size_t value_count = 0;
+    U64 first_value = 0;
+    U64 step = 0;
+    std::size_t image_index = 0;
 };
 
 U64 add_mod(U64 a, U64 b, U64 modulus)
@@ -457,7 +486,7 @@ std::vector<std::int64_t> plaintext_product(const std::vector<std::int64_t>& lef
 
 U64 fnv1a_words(const std::vector<U64>& words)
 {
-    U64 hash = 1469598103934665603ULL;
+    U64 hash = kFnv1a64OffsetBasis;
     for (U64 word : words) {
         for (int byte = 0; byte < 8; ++byte) {
             hash ^= (word >> (8 * byte)) & 0xffU;
@@ -465,6 +494,36 @@ U64 fnv1a_words(const std::vector<U64>& words)
         }
     }
     return hash;
+}
+
+U64 fnv1a_words32(const std::vector<U32>& words)
+{
+    U64 hash = kFnv1a64OffsetBasis;
+    for (U32 word : words) {
+        for (int byte = 0; byte < 4; ++byte) {
+            hash ^= (word >> (8 * byte)) & 0xffU;
+            hash *= 1099511628211ULL;
+        }
+    }
+    return hash;
+}
+
+U32 checked_u32(U64 value, const std::string& label)
+{
+    if (value > std::numeric_limits<U32>::max()) {
+        throw std::runtime_error(label + " does not fit the 32-bit HPU coefficient ABI");
+    }
+    return static_cast<U32>(value);
+}
+
+std::vector<U32> to_u32_words(const std::vector<U64>& words, const std::string& label)
+{
+    std::vector<U32> out;
+    out.reserve(words.size());
+    for (U64 word : words) {
+        out.push_back(checked_u32(word, label));
+    }
+    return out;
 }
 
 void append_words(std::vector<U64>& out, const Poly& poly)
@@ -493,6 +552,20 @@ void write_binary(const std::filesystem::path& path, const std::vector<U64>& wor
     }
 }
 
+void write_binary32(const std::filesystem::path& path, const std::vector<U32>& words)
+{
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output(path, std::ios::binary);
+    if (!output) {
+        throw std::runtime_error("failed to create " + path.string());
+    }
+    for (U32 word : words) {
+        for (int byte = 0; byte < 4; ++byte) {
+            output.put(static_cast<char>((word >> (8 * byte)) & 0xffU));
+        }
+    }
+}
+
 void write_text(const std::filesystem::path& path, const std::string& text)
 {
     std::filesystem::create_directories(path.parent_path());
@@ -507,6 +580,13 @@ std::string hex64(U64 value)
 {
     std::ostringstream out;
     out << "0x" << std::hex << std::setw(16) << std::setfill('0') << value;
+    return out.str();
+}
+
+std::string hex32(U32 value)
+{
+    std::ostringstream out;
+    out << "0x" << std::hex << std::setw(8) << std::setfill('0') << value;
     return out.str();
 }
 
@@ -628,10 +708,358 @@ void write_readable_artifact(const std::filesystem::path& root,
     write_text(root / readable_path(artifact.path), output.str());
 }
 
+std::filesystem::path hardware_image_path(const std::filesystem::path& golden_path)
+{
+    std::filesystem::path path = std::filesystem::path("images") / golden_path;
+    path.replace_extension(".u32.bin");
+    return path;
+}
+
+std::size_t add_hardware_image(std::vector<HardwareImage>& images,
+                               std::string path,
+                               std::string role,
+                               std::vector<std::size_t> shape,
+                               std::vector<U32> payload_words)
+{
+    if (payload_words.empty()) {
+        throw std::runtime_error("hardware image payload is empty: " + path);
+    }
+    HardwareImage image;
+    image.path = std::move(path);
+    image.role = std::move(role);
+    image.shape = std::move(shape);
+    image.payload_words = std::move(payload_words);
+    image.padded_words = image.payload_words;
+    const std::size_t padded_size =
+        (image.padded_words.size() + kHpuWordsPerLine - 1) / kHpuWordsPerLine * kHpuWordsPerLine;
+    image.padded_words.resize(padded_size, 0);
+    image.payload_checksum = fnv1a_words32(image.payload_words);
+    image.image_checksum = fnv1a_words32(image.padded_words);
+    images.push_back(std::move(image));
+    return images.size() - 1;
+}
+
+void write_readable_hardware_image(const std::filesystem::path& hardware_root,
+                                   const HardwareImage& image)
+{
+    std::ostringstream output;
+    output << "# HPU uint32 hardware image\n"
+           << "# source_binary: " << image.path << "\n"
+           << "# role: " << image.role << "\n"
+           << "# logical_shape: " << shape_string(image.shape) << "\n"
+           << "# encoding: uint32 little-endian canonical residue or ABI field\n"
+           << "# payload_words: " << image.payload_words.size() << "\n"
+           << "# padded_words: " << image.padded_words.size() << "\n"
+           << "# hpu_line_offset: " << image.line_offset << "\n"
+           << "# hpu_line_count: " << image.padded_words.size() / kHpuWordsPerLine << "\n"
+           << "# one HPU line is 64 uint32 words (256 bytes); zero words after payload are padding.\n";
+
+    for (std::size_t line = 0; line < image.padded_words.size() / kHpuWordsPerLine; ++line) {
+        output << "\n# line " << line << " (HPU_MEM line " << image.line_offset + line << ")\n";
+        for (std::size_t offset = 0; offset < kHpuWordsPerLine; offset += 8) {
+            const std::size_t word_index = line * kHpuWordsPerLine + offset;
+            output << std::dec << std::setw(8) << std::setfill('0') << word_index << ":";
+            for (std::size_t lane = 0; lane < 8; ++lane) {
+                output << " 0x" << std::hex << std::setw(8) << std::setfill('0')
+                       << image.padded_words[word_index + lane];
+            }
+            if (word_index >= image.payload_words.size()) {
+                output << "  # padding";
+            } else if (word_index + 8 > image.payload_words.size()) {
+                output << "  # payload then padding";
+            }
+            output << '\n';
+        }
+    }
+    write_text(hardware_root / readable_path(image.path), output.str());
+}
+
+U64 barrett_mu64(U64 modulus)
+{
+    if (modulus <= 1) {
+        throw std::runtime_error("Barrett modulus must be greater than one");
+    }
+    return static_cast<U64>((static_cast<U128>(1) << 64U) / modulus);
+}
+
+std::vector<U32> geometric_words(std::size_t count, U64 first, U64 step, U64 modulus)
+{
+    std::vector<U32> words;
+    words.reserve(count);
+    U64 value = first;
+    for (std::size_t i = 0; i < count; ++i) {
+        words.push_back(checked_u32(value, "twiddle"));
+        value = mul_mod(value, step, modulus);
+    }
+    return words;
+}
+
+void write_hardware_package(const std::filesystem::path& test_data_root,
+                            const std::vector<Artifact>& artifacts,
+                            const std::vector<U64>& moduli,
+                            const std::vector<U64>& roots)
+{
+    if (moduli.empty() || moduli.size() != roots.size()) {
+        throw std::runtime_error("hardware package requires one primitive root per modulus");
+    }
+    if (kN == 0 || (kN & (kN - 1)) != 0) {
+        throw std::runtime_error("hardware stage twiddles require power-of-two N");
+    }
+
+    const std::filesystem::path hardware_root = test_data_root / "hardware";
+    std::filesystem::remove_all(hardware_root);
+    std::vector<HardwareImage> images;
+    for (const Artifact& artifact : artifacts) {
+        add_hardware_image(images,
+                           hardware_image_path(artifact.path).string(),
+                           "uint32 hardware form of " + artifact.role,
+                           artifact.shape,
+                           to_u32_words(artifact.words, artifact.path));
+    }
+
+    std::vector<U32> mod_context_words;
+    mod_context_words.reserve(moduli.size() * 4);
+    for (U64 modulus : moduli) {
+        const U64 mu = barrett_mu64(modulus);
+        mod_context_words.push_back(checked_u32(modulus, "modulus"));
+        mod_context_words.push_back(static_cast<U32>(mu));
+        mod_context_words.push_back(static_cast<U32>(mu >> 32U));
+        mod_context_words.push_back(0);
+    }
+    const std::size_t mod_context_image = add_hardware_image(
+        images,
+        "constants/mod_ctx.u32.bin",
+        "mod_ctx records: q, Barrett mu low/high, reserved",
+        {moduli.size(), 4},
+        std::move(mod_context_words));
+
+    std::vector<TwiddleMapEntry> twiddle_entries;
+    for (std::size_t basis = 0; basis < moduli.size(); ++basis) {
+        const U64 modulus = moduli[basis];
+        const U64 psi = roots[basis];
+        if (pow_mod(psi, static_cast<U64>(kN), modulus) != modulus - 1) {
+            throw std::runtime_error("root is not a primitive 2N-th root for hardware twiddles");
+        }
+        const std::string basis_dir = "basis_" +
+            (basis < 10 ? std::string("0") : std::string()) + std::to_string(basis);
+
+        std::size_t image_index = add_hardware_image(
+            images,
+            "constants/twiddle/ntt/" + basis_dir + "/pre_twist.u32.bin",
+            "forward negacyclic pre-twist psi^i",
+            {kN},
+            geometric_words(kN, 1, psi, modulus));
+        twiddle_entries.push_back({"ntt", basis, modulus, "pre_twist", -1,
+                                    kN, 1, psi, image_index});
+
+        const U64 omega = mul_mod(psi, psi, modulus);
+        std::size_t stage = 0;
+        for (std::size_t length = 2; length <= kN; length <<= 1U, ++stage) {
+            const U64 step = pow_mod(omega, static_cast<U64>(kN / length), modulus);
+            const std::string stage_name = "stage_" +
+                (stage < 10 ? std::string("0") : std::string()) + std::to_string(stage);
+            image_index = add_hardware_image(
+                images,
+                "constants/twiddle/ntt/" + basis_dir + "/" + stage_name + ".u32.bin",
+                "forward DIT stage unique twiddles; reused by each butterfly group",
+                {length / 2},
+                geometric_words(length / 2, 1, step, modulus));
+            twiddle_entries.push_back({"ntt", basis, modulus, "butterfly", static_cast<int>(stage),
+                                        length / 2, 1, step, image_index});
+        }
+
+        const U64 inverse_omega = inverse_mod(omega, modulus);
+        stage = 0;
+        for (std::size_t length = 2; length <= kN; length <<= 1U, ++stage) {
+            const U64 step = pow_mod(inverse_omega, static_cast<U64>(kN / length), modulus);
+            const std::string stage_name = "stage_" +
+                (stage < 10 ? std::string("0") : std::string()) + std::to_string(stage);
+            image_index = add_hardware_image(
+                images,
+                "constants/twiddle/intt/" + basis_dir + "/" + stage_name + ".u32.bin",
+                "inverse DIT stage unique twiddles; reused by each butterfly group",
+                {length / 2},
+                geometric_words(length / 2, 1, step, modulus));
+            twiddle_entries.push_back({"intt", basis, modulus, "butterfly", static_cast<int>(stage),
+                                        length / 2, 1, step, image_index});
+        }
+
+        const U64 n_inverse = inverse_mod(static_cast<U64>(kN), modulus);
+        const U64 psi_inverse = inverse_mod(psi, modulus);
+        image_index = add_hardware_image(
+            images,
+            "constants/twiddle/intt/" + basis_dir + "/post_untwist_scale.u32.bin",
+            "inverse negacyclic post-factor N^-1 * psi^-i",
+            {kN},
+            geometric_words(kN, n_inverse, psi_inverse, modulus));
+        twiddle_entries.push_back({"intt", basis, modulus, "post_untwist_scale", -1,
+                                    kN, n_inverse, psi_inverse, image_index});
+    }
+
+    U64 next_line = 0;
+    std::vector<U32> hpu_mem_words;
+    for (HardwareImage& image : images) {
+        image.line_offset = next_line;
+        const U64 line_count = image.padded_words.size() / kHpuWordsPerLine;
+        next_line += line_count;
+        hpu_mem_words.insert(hpu_mem_words.end(), image.padded_words.begin(), image.padded_words.end());
+        write_binary32(hardware_root / image.path, image.padded_words);
+    }
+    if (hpu_mem_words.size() != next_line * kHpuWordsPerLine) {
+        throw std::runtime_error("HPU_MEM image line accounting mismatch");
+    }
+    for (const HardwareImage& image : images) {
+        write_readable_hardware_image(hardware_root, image);
+    }
+    write_binary32(hardware_root / "hpu_mem_image.u32.bin", hpu_mem_words);
+
+    std::ostringstream line_map;
+    line_map << "path,role,shape,address_byte,line_offset,line_count,payload_words,payload_bytes,"
+                "padded_words,padded_bytes\n";
+    for (const HardwareImage& image : images) {
+        const U64 line_count = image.padded_words.size() / kHpuWordsPerLine;
+        line_map << csv_field(image.path) << ',' << csv_field(image.role) << ','
+                 << csv_field(shape_string(image.shape)) << ','
+                 << hex64(kHpuMemBase + image.line_offset * kHpuLineBytes) << ','
+                 << image.line_offset << ',' << line_count << ','
+                 << image.payload_words.size() << ',' << image.payload_words.size() * sizeof(U32) << ','
+                 << image.padded_words.size() << ',' << image.padded_words.size() * sizeof(U32) << '\n';
+    }
+    write_text(hardware_root / "line_map.csv", line_map.str());
+
+    std::ostringstream manifest;
+    manifest << "path,readable_path,role,shape,payload_words,padded_words,line_offset,line_count,"
+                "payload_fnv1a64,image_fnv1a64\n";
+    for (const HardwareImage& image : images) {
+        manifest << csv_field(image.path) << ','
+                 << csv_field(readable_path(image.path).string()) << ','
+                 << csv_field(image.role) << ',' << csv_field(shape_string(image.shape)) << ','
+                 << image.payload_words.size() << ',' << image.padded_words.size() << ','
+                 << image.line_offset << ',' << image.padded_words.size() / kHpuWordsPerLine << ','
+                 << hex64(image.payload_checksum) << ',' << hex64(image.image_checksum) << '\n';
+    }
+    manifest << csv_field("hpu_mem_image.u32.bin") << ',' << csv_field("") << ','
+             << csv_field("complete contiguous HPU_MEM window image") << ',' << csv_field("") << ','
+             << hpu_mem_words.size() << ',' << hpu_mem_words.size() << ",0," << next_line << ','
+             << hex64(fnv1a_words32(hpu_mem_words)) << ',' << hex64(fnv1a_words32(hpu_mem_words)) << '\n';
+    write_text(hardware_root / "hardware_manifest.csv", manifest.str());
+
+    const HardwareImage& mod_image = images[mod_context_image];
+    std::ostringstream mod_map;
+    mod_map << "context_index,modulus,modulus_hex,barrett_mu_hex,record_word_offset,"
+               "line_offset,line_word_offset,record_words\n";
+    for (std::size_t basis = 0; basis < moduli.size(); ++basis) {
+        const std::size_t record_word = basis * 4;
+        mod_map << basis << ',' << moduli[basis] << ',' << hex32(checked_u32(moduli[basis], "modulus"))
+                << ',' << hex64(barrett_mu64(moduli[basis])) << ',' << record_word << ','
+                << mod_image.line_offset + record_word / kHpuWordsPerLine << ','
+                << record_word % kHpuWordsPerLine << ",4\n";
+    }
+    write_text(hardware_root / "mod_ctx_map.csv", mod_map.str());
+
+    std::ostringstream twiddle_map;
+    twiddle_map << "direction,basis_index,modulus,phase,stage,value_count,first_value,step,"
+                   "path,line_offset,line_count\n";
+    for (const TwiddleMapEntry& entry : twiddle_entries) {
+        const HardwareImage& image = images[entry.image_index];
+        twiddle_map << entry.direction << ',' << entry.basis << ',' << entry.modulus << ','
+                    << entry.phase << ',' << entry.stage << ',' << entry.value_count << ','
+                    << hex32(checked_u32(entry.first_value, "twiddle first value")) << ','
+                    << hex32(checked_u32(entry.step, "twiddle step")) << ','
+                    << csv_field(image.path) << ',' << image.line_offset << ','
+                    << image.padded_words.size() / kHpuWordsPerLine << '\n';
+    }
+    write_text(hardware_root / "twiddle_map.csv", twiddle_map.str());
+
+    const U64 window_bytes = next_line * kHpuLineBytes;
+    std::ostringstream hpu_mem_config;
+    hpu_mem_config << "{\n"
+                   << "  \"format_version\": 1,\n"
+                   << "  \"status\": \"HOST_WINDOW_LAYOUT_READY_CSR_NUMERIC_OFFSETS_REQUIRE_RTL_CONFIRMATION\",\n"
+                   << "  \"image\": \"hpu_mem_image.u32.bin\",\n"
+                   << "  \"base_address\": \"" << hex64(kHpuMemBase) << "\",\n"
+                   << "  \"base_lo\": \"" << hex32(static_cast<U32>(kHpuMemBase)) << "\",\n"
+                   << "  \"base_hi\": \"" << hex32(static_cast<U32>(kHpuMemBase >> 32U)) << "\",\n"
+                   << "  \"line_bytes\": " << kHpuLineBytes << ",\n"
+                   << "  \"words_per_line\": " << kHpuWordsPerLine << ",\n"
+                   << "  \"size_lines\": " << next_line << ",\n"
+                   << "  \"size_bytes\": " << window_bytes << ",\n"
+                   << "  \"end_address_exclusive\": \"" << hex64(kHpuMemBase + window_bytes) << "\",\n"
+                   << "  \"image_fnv1a64\": \"" << hex64(fnv1a_words32(hpu_mem_words)) << "\",\n"
+                   << "  \"csr_numeric_offsets\": \"RTL_CONFIRM_REQUIRED\",\n"
+                   << "  \"programming_sequence\": [\n"
+                   << "    {\"csr\": \"HPU_MEM_BASE_LO_SHADOW\", \"value\": \""
+                   << hex32(static_cast<U32>(kHpuMemBase)) << "\"},\n"
+                   << "    {\"csr\": \"HPU_MEM_BASE_HI_SHADOW\", \"value\": \""
+                   << hex32(static_cast<U32>(kHpuMemBase >> 32U)) << "\"},\n"
+                   << "    {\"csr\": \"HPU_MEM_SIZE_LINES_SHADOW\", \"value\": " << next_line << "},\n"
+                   << "    {\"csr\": \"HPU_MEM_COMMIT\", \"value\": 1},\n"
+                   << "    {\"csr\": \"HPU_MEM_STATUS\", \"action\": \"read_and_require_active_without_fault\"}\n"
+                   << "  ]\n}\n";
+    write_text(hardware_root / "hpu_mem_config.json", hpu_mem_config.str());
+
+    std::ostringstream abi;
+    abi << "{\n"
+        << "  \"format_version\": 1,\n"
+        << "  \"N\": " << kN << ",\n"
+        << "  \"modulus_count\": " << moduli.size() << ",\n"
+        << "  \"coefficient_bits\": 32,\n"
+        << "  \"byte_order\": \"little-endian\",\n"
+        << "  \"line_bytes\": " << kHpuLineBytes << ",\n"
+        << "  \"line_words\": " << kHpuWordsPerLine << ",\n"
+        << "  \"line_offset_origin\": \"HPU_MEM base address\",\n"
+        << "  \"mod_ctx\": {\n"
+        << "    \"record_words\": 4,\n"
+        << "    \"word_0\": \"q (uint32)\",\n"
+        << "    \"word_1\": \"floor(2^64/q)[31:0]\",\n"
+        << "    \"word_2\": \"floor(2^64/q)[63:32]\",\n"
+        << "    \"word_3\": \"reserved, zero\"\n"
+        << "  },\n"
+        << "  \"twiddle\": {\n"
+        << "    \"convention\": \"negacyclic pre-twist, bit reversal, radix-2 DIT stages\",\n"
+        << "    \"stage_payload\": \"unique powers step^j for j=0..2^stage-1\",\n"
+        << "    \"reuse_rule\": \"each butterfly group reuses the same stage payload\",\n"
+        << "    \"stage_alignment\": \"each stage image starts at a 256-byte line\",\n"
+        << "    \"bit_reversal\": \"performed by HPU internal shuffle path before stage 0\",\n"
+        << "    \"intt_post_factor\": \"N^-1 * psi^-i\"\n"
+        << "  }\n}\n";
+    write_text(hardware_root / "abi.json", abi.str());
+
+    std::ostringstream memory_map;
+    memory_map << "{\n"
+               << "  \"status\": \"UINT32_256B_LINE_LAYOUT_GENERATED\",\n"
+               << "  \"base_address\": \"" << hex64(kHpuMemBase) << "\",\n"
+               << "  \"line_bytes\": " << kHpuLineBytes << ",\n"
+               << "  \"line_count\": " << next_line << ",\n"
+               << "  \"hardware_image\": \"hardware/hpu_mem_image.u32.bin\",\n"
+               << "  \"line_map\": \"hardware/line_map.csv\",\n"
+               << "  \"hpu_mem_config\": \"hardware/hpu_mem_config.json\",\n"
+               << "  \"hardware_fields_pending\": [\"numeric HPU_MEM CSR offsets\", "
+                  "\"instruction rs1/rs2 binding\", \"scratch allocation\", "
+                  "\"host-visible DMA completion\"]\n}\n";
+    write_text(test_data_root / "memory_map.json", memory_map.str());
+
+    write_text(hardware_root / "README.md",
+               "# HPU uint32 Hardware Package\n\n"
+               "`hpu_mem_image.u32.bin` is the complete contiguous HPU_MEM window image. "
+               "All words are little-endian uint32 and every object starts on a 256-byte "
+               "line. Program the semantic CSR values in `hpu_mem_config.json`, then use "
+               "`line_map.csv` for `cmd_mem_line_offset` and `cmd_mem_len_lines`.\n\n"
+               "`images/` contains independently loadable, line-padded forms of the uint64 "
+               "mathematical golden. `mod_ctx_map.csv` documents q and Barrett mu records. "
+               "`twiddle_map.csv` gives each modulus, direction, phase, stage, line offset, "
+               "and line count. Every individual binary has an annotated hex view.\n\n"
+               "The physical host-memory ABI in `abi.json` is complete. Numeric CSR offsets, "
+               "instruction register binding, SRAM scratch allocation, and DMA completion "
+               "signaling still require RTL/runtime integration.\n");
+}
+
 void write_case_package(const std::filesystem::path& suite_root,
                         const std::string& case_name,
                         const std::string& params,
-                        std::vector<Artifact> artifacts)
+                        std::vector<Artifact> artifacts,
+                        const std::vector<U64>& moduli,
+                        const std::vector<U64>& roots)
 {
     const std::filesystem::path root = suite_root / case_name / "test_data";
     for (Artifact& artifact : artifacts) {
@@ -651,18 +1079,15 @@ void write_case_package(const std::filesystem::path& suite_root,
     }
     write_text(root / "params.json", params);
     write_text(root / "artifact_manifest.csv", manifest.str());
+    write_hardware_package(root, artifacts, moduli, roots);
     write_text(root / "README.md",
                "This UT package is generated from the same deterministic N=4096 FHE "
                "reference used by ciphertext_multiply. Binary values are little-endian "
                "uint64 canonical residues. Every binary has a complete annotated `.hex.txt` "
                "view with block coordinates. Shape and checksum information is in "
-               "artifact_manifest.csv. Hardware-specific twiddle/mod_ctx packing and DMA "
-               "addresses remain subject to the backend ABI.\n");
-}
-
-U64 align_up(U64 value, U64 alignment)
-{
-    return (value + alignment - 1) / alignment * alignment;
+               "artifact_manifest.csv. The independent `hardware/` tree contains uint32, "
+               "256-byte-line-padded images, q/Barrett contexts, stage twiddles, line offsets, "
+               "and HPU_MEM window configuration.\n");
 }
 
 void verify_equal(const BasisPoly& left, const BasisPoly& right, const std::string& label)
@@ -923,6 +1348,7 @@ void generate(const std::filesystem::path& output_root,
         write_binary(output_root / artifact.path, artifact.words);
         write_readable_artifact(output_root, artifact);
     }
+    write_hardware_package(output_root, artifacts, all_moduli, all_roots);
 
     std::ostringstream params;
     params << "{\n"
@@ -937,6 +1363,8 @@ void generate(const std::filesystem::path& output_root,
            << "  \"seed\": \"" << hex64(kSeed) << "\",\n"
            << "  \"basis_order\": \"Q[0..3],P[0..2]\",\n"
            << "  \"coefficient_encoding\": \"uint64 little-endian canonical residue\",\n"
+           << "  \"hardware_coefficient_encoding\": \"uint32 little-endian, 64 words per 256-byte line\",\n"
+           << "  \"hardware_package\": \"hardware/\",\n"
            << "  \"ntt_convention\": \"negacyclic twist, DIT cyclic NTT, natural-order output\",\n"
            << "  \"evaluation_key_noise\": 0,\n"
            << "  \"evaluation_key_fixture\": \"P-divisible exact functional key\",\n"
@@ -962,35 +1390,16 @@ void generate(const std::filesystem::path& output_root,
     }
     write_text(output_root / "artifact_manifest.csv", manifest.str());
 
-    U64 address = 0x10000000ULL;
-    std::ostringstream memory_map;
-    memory_map << "{\n  \"status\": \"PROVISIONAL_LOGICAL_MAP_REQUIRES_RTL_ABI_CONFIRMATION\",\n"
-               << "  \"base_address\": \"0x10000000\",\n"
-               << "  \"alignment_bytes\": 64,\n  \"regions\": [\n";
-    for (std::size_t i = 0; i < artifacts.size(); ++i) {
-        const Artifact& artifact = artifacts[i];
-        address = align_up(address, 64);
-        memory_map << "    {\"name\": \"" << artifact.path << "\", \"address\": \""
-                   << hex64(address) << "\", \"bytes\": " << artifact.words.size() * sizeof(U64)
-                   << ", \"shape\": \"" << shape_string(artifact.shape) << "\"}"
-                   << (i + 1 == artifacts.size() ? "\n" : ",\n");
-        address += artifact.words.size() * sizeof(U64);
-    }
-    memory_map << "  ],\n"
-               << "  \"hardware_fields_pending\": [\"mod_ctx packing\", \"twiddle packing\", "
-                  "\"DMA length unit\", \"scratch allocation\", \"host-visible completion\"]\n}\n";
-    write_text(output_root / "memory_map.json", memory_map.str());
-
     const std::string dma_plan =
         "phase,operation,logical_object,domain,basis,status\n"
         "input,dload,ct_a_q,coefficient,Q,READY\n"
         "input,dload,ct_b_q,coefficient,Q,READY\n"
-        "transform,pntt,ct_a_and_ct_b,NTT,Q,READY_MATH_LAYOUT_PENDING\n"
+        "transform,pntt,ct_a_and_ct_b,NTT,Q,READY_UINT32_LINE_LAYOUT\n"
         "tensor,pmul_pmac,t0_t1_t2,NTT,Q,READY\n"
         "relinearize,bconv,t2_digits,coefficient,Q_to_QP,READY\n"
-        "relinearize,pntt,t2_digits,NTT,QP,READY_MATH_LAYOUT_PENDING\n"
+        "relinearize,pntt,t2_digits,NTT,QP,READY_UINT32_LINE_LAYOUT\n"
         "relinearize,pmul_pmac,rlk_and_t2_digits,NTT,QP,READY\n"
-        "relinearize,pintt,keyswitch_accum,coefficient,QP,READY_MATH_LAYOUT_PENDING\n"
+        "relinearize,pintt,keyswitch_accum,coefficient,QP,READY_UINT32_LINE_LAYOUT\n"
         "relinearize,moddown,keyswitch_accum,coefficient,QP_to_Q,READY\n"
         "output,dstore,ciphertext_out_q,coefficient,Q,READY\n";
     write_text(output_root / "dma_plan.csv", dma_plan);
@@ -1000,18 +1409,20 @@ void generate(const std::filesystem::path& output_root,
         "This directory is generated by `hpu_reference_vectors`. It is a deterministic, "
         "algorithm-level RLWE/RNS multiplication and hybrid relinearization fixture for "
         "`N=4096, Q=4, P=3, dnum=2`.\n\n"
-        "Binary files contain canonical residues as little-endian uint64 values. Every binary "
+        "Top-level binary files contain mathematical golden residues as little-endian uint64 values. Every binary "
         "has a complete annotated `.hex.txt` view. Dimensions, readable paths, and checksums "
         "are listed in `artifact_manifest.csv`; basis order is Q followed by P.\n\n"
+        "The independent `hardware/` tree contains uint32 hardware images, q/Barrett contexts, "
+        "physical per-stage twiddles, 256-byte line offsets/counts, and a complete HPU_MEM image/config.\n\n"
         "The validation path is: encrypt two test messages, NTT, three-component tensor "
         "product, INTT, digit ModUp to Q union P, NTT, multiply by the relinearization key, "
         "INTT, ModDown by P, compose the two-component ciphertext, decrypt, and compare with "
         "negacyclic plaintext multiplication modulo t.\n\n"
         "The key and ciphertext use zero test noise and a P-divisible functional evaluation "
         "key so failures are bit-exact and easy to localize. They are not security test vectors. "
-        "`memory_map.json` is a proposed logical "
-        "DDR map only; RTL owners must confirm DMA length units, mod_ctx/twiddle packing, "
-        "scratch addresses, and completion semantics before direct hardware execution.\n";
+        "`memory_map.json` points to the generated uint32/256-byte host-memory layout. RTL owners "
+        "still must confirm numeric CSR offsets, instruction register binding, scratch addresses, "
+        "and completion semantics before direct hardware execution.\n";
     write_text(output_root / "README.md", readme);
     write_text(output_root / "VALIDATION.txt",
                "PASS\nrelinearized_decryption == tensor_decryption\n"
@@ -1027,6 +1438,7 @@ void generate(const std::filesystem::path& output_root,
                 << "\",\n  \"N\": " << kN << ",\n  \"input_domain\": \""
                 << input_domain << "\",\n  \"output_domain\": \"" << output_domain
                 << "\",\n  \"layout\": \"row-major, coefficient last, little-endian uint64\",\n"
+                << "  \"hardware_layout\": \"hardware/: little-endian uint32, 64 words per 256-byte line\",\n"
                 << "  \"moduli\": [";
             for (std::size_t i = 0; i < moduli.size(); ++i) {
                 out << (i ? ", " : "") << moduli[i];
@@ -1042,7 +1454,8 @@ void generate(const std::filesystem::path& output_root,
                      {kN}, ct_a_ntt[0][0]);
         write_case_package(*suite_root, "ntt",
                            common_params("ntt", "coefficient", "NTT", {q_moduli[0]}),
-                           std::move(case_artifacts));
+                           std::move(case_artifacts),
+                           {q_moduli[0]}, {q_roots[0]});
 
         case_artifacts.clear();
         add_artifact(case_artifacts, "input.bin", "INTT input, NTT domain",
@@ -1051,7 +1464,8 @@ void generate(const std::filesystem::path& output_root,
                      {kN}, ct_a[0][0]);
         write_case_package(*suite_root, "intt",
                            common_params("intt", "NTT", "coefficient", {q_moduli[0]}),
-                           std::move(case_artifacts));
+                           std::move(case_artifacts),
+                           {q_moduli[0]}, {q_roots[0]});
 
         case_artifacts.clear();
         add_artifact(case_artifacts, "input_a.bin", "left polynomial", {kN}, ct_a_ntt[0][0]);
@@ -1059,7 +1473,8 @@ void generate(const std::filesystem::path& output_root,
         add_artifact(case_artifacts, "expected.bin", "pointwise product", {kN}, tensor_ntt[0][0]);
         write_case_package(*suite_root, "mm",
                            common_params("mm", "NTT", "NTT", {q_moduli[0]}),
-                           std::move(case_artifacts));
+                           std::move(case_artifacts),
+                           {q_moduli[0]}, {q_roots[0]});
 
         case_artifacts.clear();
         add_artifact(case_artifacts, "input_q.bin", "single Q limb", {kN}, tensor[2][0]);
@@ -1069,11 +1484,13 @@ void generate(const std::filesystem::path& output_root,
         write_case_package(*suite_root, "bconv",
                            common_params("bconv", "coefficient/Q0", "coefficient/P0",
                                          {q_moduli[0], p_moduli[0]}),
-                           case_artifacts);
+                           case_artifacts,
+                           {q_moduli[0], p_moduli[0]}, {q_roots[0], all_roots[kNumQ]});
         write_case_package(*suite_root, "modup",
                            common_params("modup", "coefficient/Q0", "coefficient/P0",
                                          {q_moduli[0], p_moduli[0]}),
-                           std::move(case_artifacts));
+                           std::move(case_artifacts),
+                           {q_moduli[0], p_moduli[0]}, {q_roots[0], all_roots[kNumQ]});
 
         case_artifacts.clear();
         words.clear(); append_words(words, ct_a_ntt[0]); append_words(words, ct_a_ntt[1]);
@@ -1089,7 +1506,8 @@ void generate(const std::filesystem::path& output_root,
                      {"component[c0,c1]", "basis_q", "coefficient"});
         write_case_package(*suite_root, "pmult",
                            common_params("pmult", "NTT/Q", "NTT/Q", q_moduli),
-                           std::move(case_artifacts));
+                           std::move(case_artifacts),
+                           q_moduli, q_roots);
 
         case_artifacts.clear();
         words.clear(); append_words(words, ct_a_ntt[0]); append_words(words, ct_a_ntt[1]);
@@ -1103,7 +1521,8 @@ void generate(const std::filesystem::path& output_root,
                      {"tensor_component[t0,t1,t2]", "basis_q", "coefficient"});
         write_case_package(*suite_root, "cmult",
                            common_params("cmult", "NTT/Q", "NTT/Q", q_moduli),
-                           std::move(case_artifacts));
+                           std::move(case_artifacts),
+                           q_moduli, q_roots);
 
         case_artifacts.clear();
         words.clear(); append_words(words, keyswitch_qp[0]);
@@ -1115,7 +1534,8 @@ void generate(const std::filesystem::path& output_root,
                      {kNumQ, kN}, std::move(words), {"basis_q", "coefficient"});
         write_case_package(*suite_root, "moddown",
                            common_params("moddown", "coefficient/QP", "coefficient/Q", all_moduli),
-                           std::move(case_artifacts));
+                           std::move(case_artifacts),
+                           all_moduli, all_roots);
 
         case_artifacts.clear();
         words.clear(); append_words(words, tensor[2]);
@@ -1133,7 +1553,8 @@ void generate(const std::filesystem::path& output_root,
         write_case_package(*suite_root, "keyswitch",
                            common_params("keyswitch", "coefficient/Q + rlk/NTT/QP",
                                          "coefficient/Q", all_moduli),
-                           std::move(case_artifacts));
+                           std::move(case_artifacts),
+                           all_moduli, all_roots);
 
         write_text(*suite_root / "auto" / "test_data" / "STATUS.md",
                    "BLOCKED: auto.asm still uses symbolic DMA registers. Physical register "

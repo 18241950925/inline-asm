@@ -118,6 +118,8 @@ ctest --test-dir build --output-on-failure
 - `test_data/input.bin`、`test_data/input.hex.txt`
 - `test_data/expected.bin`、`test_data/expected.hex.txt`
 - `test_data/params.json`、`test_data/artifact_manifest.csv`
+- `test_data/hardware/hpu_mem_image.u32.bin`、`line_map.csv`、`hpu_mem_config.json`
+- `test_data/hardware/mod_ctx_map.csv`、`twiddle_map.csv`、`abi.json`
 
 ---
 
@@ -135,9 +137,9 @@ ctest --test-dir build --output-on-failure
 - Reference 参数位于 `test/reference/main.cpp` 的 `kN`、`kNumQ`、`kNumP`、`kDnum`、`kPlainModulus` 和 `kSeed`。
 - `outputs/*/test_data/params.json` 是生成结果，不是输入配置；直接修改后会在下一次生成时被覆盖。
 
-修改 `N/Q/P/dnum` 时必须同步修改两处源配置，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 8` 等约束。当前统一示例为 `N=4096, Q=4, P=3, dnum=2`。
+修改 `N/Q/P/dnum` 时必须同步修改两处源配置，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 8`、所有 Q/P 模数可用 `uint32` 表示等约束。当前统一示例为 `N=4096, Q=4, P=3, dnum=2`。
 
-`hpu_delivery` 会为 `ciphertext_multiply` 自动生成与主配置一致的 `N=4096, Q=4, P=3, dnum=2` 输入、评估密钥、阶段 golden、最终输出、明文校验、逻辑内存映射与 artifact checksum，并从同一 reference 拆分出 NTT、INTT、MM、BConv、ModUp、PMULT、CMULT、ModDown 和 KeySwitch 的独立 UT 数据包。`auto/test_data/STATUS.md` 记录该算子当前的寄存器分配阻塞项。
+`hpu_delivery` 会为 `ciphertext_multiply` 自动生成与主配置一致的 `N=4096, Q=4, P=3, dnum=2` 输入、评估密钥、阶段 golden、最终输出、明文校验和 artifact checksum。它同时生成独立的 `uint32` HPU_MEM 镜像、q/Barrett 上下文、逐 stage twiddle、256B line offset/count，并从同一 reference 拆分出 NTT、INTT、MM、BConv、ModUp、PMULT、CMULT、ModDown 和 KeySwitch 的独立 UT 数据包。`auto/test_data/STATUS.md` 记录该算子当前的寄存器分配阻塞项。
 
 
 ## 4. 关键设计实现说明
@@ -175,10 +177,12 @@ ctest --test-dir build --output-on-failure
 - 当前 `.inst32` 输出仅覆盖可直接完成寄存器解析的 ASM；`auto` 仍含 `x_c0`、`x_offset`、`x_out` 等符号寄存器占位符，需在完成物理寄存器分配后再编码
 - `cmult` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32` 生成链路；其中 `ciphertext_multiply` 要求 `num_q % dnum == 0` 且 `num_q + num_p <= 8`
 - `ciphertext_multiply/test_data` 已由软件 reference 自动生成；二进制格式、shape 和校验值见其中的 `params.json` 与 `artifact_manifest.csv`
-- 当前完整乘法和大部分算子的 DMA 地址仍使用 `x0/x0` 占位；硬件确认 DMA ABI 前，`.inst32` 是计算顺序流而不是可直接执行程序
+- 顶层 `.bin` 是 `uint64` 数学 golden；真正面向 HPU 加载的是 `test_data/hardware/` 下按 256B line 补齐的 `.u32.bin`
+- `hardware/line_map.csv` 给出每个对象的 byte address、line offset 和 line count；`hpu_mem_config.json` 给出 HPU_MEM window 值和语义 CSR 编程顺序
+- 当前完整乘法和大部分算子的 DMA 地址仍使用 `x0/x0` 占位；runtime 把 `line_map.csv` 的 line offset/count 绑定到 `rs1/rs2` 前，`.inst32` 是计算顺序流而不是可直接执行程序
 
 ---
 
 ## 6. 当前交付边界
 
-软件侧已完成指令生成、编码、完整密文乘法/重线性化 reference golden 和 RV 接口冒烟流。硬件直接执行仍依赖 DMA 地址 ABI、`mod_ctx`/twiddle 打包、scratch 布局和 DMA/`psync` 完成关系；详细签字项见 `doc/HPU_TEST_DELIVERY.md`。
+软件侧已完成指令生成、编码、完整密文乘法/重线性化 reference golden、独立 `uint32` 硬件镜像、q/Barrett `mod_ctx`、逐 stage twiddle、256B line 映射、HPU_MEM window 配置和 RV 接口冒烟流。硬件直接执行仍依赖 CSR 数字偏移、指令 `rs1/rs2` 绑定、scratch 布局和 DMA/`psync` 完成关系；详细签字项见 `doc/HPU_TEST_DELIVERY.md`。
