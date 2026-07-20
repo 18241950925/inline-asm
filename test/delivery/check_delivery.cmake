@@ -102,6 +102,70 @@ foreach(MARKER
     endif()
 endforeach()
 
+string(FIND "${CIPHERTEXT_ASM}" "pfree p" PFREE_POSITION)
+if(PFREE_POSITION EQUAL -1)
+    message(FATAL_ERROR "Ciphertext multiply does not release temporary object slots with pfree")
+endif()
+
+foreach(REMOVED_MNEMONIC pshcfg pshuf pseed psample)
+    string(FIND "${CIPHERTEXT_ASM}" "${REMOVED_MNEMONIC} " REMOVED_POSITION)
+    if(NOT REMOVED_POSITION EQUAL -1)
+        message(FATAL_ERROR "Removed instruction appears in ciphertext multiply: ${REMOVED_MNEMONIC}")
+    endif()
+endforeach()
+
+file(READ "${ROOT}/outputs/rv_interface_smoke/test_data/expected_decode.csv" RV_EXPECTED_DECODE)
+if(NOT RV_EXPECTED_DECODE MATCHES "0x7A00000B,custom0,\"pfree p5\"")
+    message(FATAL_ERROR "RV decode expectations are missing the architectural pfree encoding")
+endif()
+
+file(READ "${ROOT}/outputs/rv_interface_smoke/test_data/negative_cases.asm.txt" RV_NEGATIVE_CASES)
+foreach(REMOVED_MNEMONIC pshcfg pshuf pseed psample)
+    string(FIND "${RV_NEGATIVE_CASES}" "${REMOVED_MNEMONIC} " NEGATIVE_POSITION)
+    if(NEGATIVE_POSITION EQUAL -1)
+        message(FATAL_ERROR "RV negative cases do not reject removed instruction: ${REMOVED_MNEMONIC}")
+    endif()
+endforeach()
+
+function(CHECK_OBJECT_LIFECYCLE RELATIVE_PATH)
+    foreach(SLOT RANGE 0 7)
+        set(LIVE_${SLOT} 0)
+    endforeach()
+
+    file(STRINGS "${ROOT}/${RELATIVE_PATH}" ASM_LINES)
+    foreach(LINE IN LISTS ASM_LINES)
+        if(LINE MATCHES "\"dload [^,]+, [^,]+, p([0-7]), [0-3]")
+            set(SLOT "${CMAKE_MATCH_1}")
+            if(LIVE_${SLOT})
+                message(FATAL_ERROR "${RELATIVE_PATH}: dload overwrites live object p${SLOT}")
+            endif()
+            set(LIVE_${SLOT} 1)
+        elseif(LINE MATCHES "\"(padd|psub|pmul|pmac|pntt|pintt) p([0-7]),")
+            set(SLOT "${CMAKE_MATCH_2}")
+            set(LIVE_${SLOT} 1)
+        elseif(LINE MATCHES "\"pfree p([0-7])")
+            set(SLOT "${CMAKE_MATCH_1}")
+            if(NOT LIVE_${SLOT})
+                message(FATAL_ERROR "${RELATIVE_PATH}: pfree targets non-live object p${SLOT}")
+            endif()
+            set(LIVE_${SLOT} 0)
+        elseif(LINE MATCHES "\"dstore [^,]+, [^,]+, p([0-7]), ([01])")
+            set(SLOT "${CMAKE_MATCH_1}")
+            set(RELEASE "${CMAKE_MATCH_2}")
+            if(RELEASE EQUAL 1)
+                if(NOT LIVE_${SLOT})
+                    message(FATAL_ERROR "${RELATIVE_PATH}: dstore rel=1 targets non-live object p${SLOT}")
+                endif()
+                set(LIVE_${SLOT} 0)
+            endif()
+        endif()
+    endforeach()
+endfunction()
+
+foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch ciphertext_multiply)
+    CHECK_OBJECT_LIFECYCLE("output/${CASE_NAME}.asm")
+endforeach()
+
 file(STRINGS "${ROOT}/outputs/ciphertext_multiply/ciphertext_multiply.inst32" INST32_LINES)
 list(LENGTH INST32_LINES INST32_COUNT)
 if(INST32_COUNT LESS 2000)
@@ -112,6 +176,8 @@ file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "SOFTWARE_DELIVERY=PASS\n"
     "FHE_REFERENCE=PASS\n"
     "ASM_ENCODING=PASS\n"
+    "INSTRUCTION_SET_11=PASS\n"
+    "PFREE_LIFECYCLE=PASS\n"
     "RV_INTERFACE_SMOKE=PASS\n"
     "OPERATOR_UT_PACKAGES=PASS\n"
     "HARDWARE_UINT32_IMAGES=PASS\n"

@@ -1,90 +1,112 @@
 # HPU 内联汇编指令与机器码转译手册
 
-本手册基于 `HPU_2.txt` 数据手册第二版，为负责后端机器码转译的开发人员提供 HPU 内联汇编指令的标准语法格式、操作数映射说明以及译码对照参考。
+本手册描述当前项目采用的 HPU 软件接口。体系结构只保留 11 条指令：9 条 `custom0` 内部执行指令和 2 条 `custom1` DMA 指令。历史版本中的 `pshcfg`、`pshuf`、`pseed`、`psample` 已删除，编码器必须拒绝这些助记符。
 
-## 一、概述与编码规范
+> 本项目继续以现有 `custom1` 位域实现为准；本次指令集更新不改变 `dload/dstore` 的字段位置和 DLoad type 定义。
 
-HPU 指令分两类操作码通道：
-- **外部访存类指令 (custom1)**：用于启动主存与本地 SRAM 的数据搬运并维护对象槽位（如 `dload`, `dstore`）。
-- **内部执行类指令 (custom0)**：由 HPU 内部依次派发执行（如 `padd`, `pntt`, `psync` 等）。操作码固定为 `0001011`。HPU内部将 `inst[31:28]` 用作扁平化的 4-bit 主操作码 (OPC)。
+## 1. 指令总表
 
-**核心约定**：
-1. **统一本地SRAM与片段试图**：操作数 `p0, p1 ... p7` 表示本地 3-bit 对象槽位视图，而非大容量向量寄存器。
-2. **即立即数模式隐含化**：为了可读性，部分基础模运算（AR3 格式）依据汇编习惯通过助记符直接区分寻址模式，带 `i` 后缀的指令表示末尾操作数为 8 位立即数 (`cimm8`)。在译码阶段需将其转译为 `MODE[0] = 1` 的指令。
-3. **参数强约束**：所有的修饰位（如 `MODE/FLAG`、`IDX1`、`TAG`）全部作为明文参数写在汇编指令末尾。
+| 类别 | 指令 | 格式 | custom0 OPC | 语义 |
+| --- | --- | --- | --- | --- |
+| 算术 | `padd` | AR3 | `0000` | 模加 |
+| 算术 | `psub` | AR3 | `0001` | 模减 |
+| 算术 | `pmul` | AR3 | `0010` | 模乘 |
+| 算术 | `pmac` | AR3 | `0011` | 模乘加 |
+| 变换 | `pntt` | STG | `0100` | 原地 NTT stage |
+| 变换 | `pintt` | STG | `0101` | 原地 INTT stage |
+| 上下文 | `pmodld` | CFG | `0110` | 激活模上下文 |
+| 生命周期 | `pfree` | CFG | `0111` | 释放对象槽位地址空间 |
+| 同步 | `psync` | SYNC | `1000` | 队列同步/完成通知 |
+| 外部访存 | `dload` | DMA | - | 外存加载到对象槽位 |
+| 外部访存 | `dstore` | DMA | - | 对象槽位写回外存 |
 
----
+`custom0` 的固定低 7-bit opcode 为 `0001011`，`inst[31:28]` 为表中的 OPC。`1001` 到 `1111` 保留，不得分配给旧指令。
 
-## 二、指令格式与译码规则对照表
+## 2. AR3 算术指令
 
-### 1. AR3 格式：三对象基础算术类
-用于基础逐元素模运算类指令，HPU 并行度为 64。
+对象模式语法：
 
-本类指令在汇编中使用两组助记符区分对象的寻址方式。
-* **操作数格式 (对象寻址, `mode=0`)**: `mnemonic pdst, psrc1, psrc2`
-* **操作数格式 (立即数寻址, `mode=1`)**: `mnemonic p_dst, psrc1, cimm8`
+```asm
+padd p2, p0, p1
+psub p2, p0, p1
+pmul p2, p0, p1
+pmac p2, p0, p1
+```
 
-| 汇编指令名称 | 操作数结构 | 核心语义 | 操作码 OPC + 译码说明 |
-| --- | --- | --- | --- |
-| `padd` | `pdst, psrc1, psrc2` | 模加（对象） | OPC对应padd，设置 `MODE[0]=0` |
-| `paddi`| `pdst, psrc1, cimm8` | 模加（立即数） | OPC对应padd，设置 `MODE[0]=1` |
-| `psub` | `pdst, psrc1, psrc2` | 模减（对象） | OPC对应psub，设置 `MODE[0]=0` |
-| `psubi`| `pdst, psrc1, cimm8` | 模减（立即数） | OPC对应psub，设置 `MODE[0]=1` |
-| `pmul` | `pdst, psrc1, psrc2` | 模乘（对象） | OPC对应pmul，设置 `MODE[0]=0` |
-| `pmuli`| `pdst, psrc1, cimm8` | 模乘（立即数） | OPC对应pmul，设置 `MODE[0]=1` |
-| `pmac` | `pdst, psrc1, psrc2` | 模乘加（对象） | OPC对应pmac，设置 `MODE[0]=0` |
-| `pmaci`| `pdst, psrc1, cimm8` | 模乘加（立即数） | OPC对应pmac，设置 `MODE[0]=1` |
+只有 `pmul` 和 `pmac` 支持 8-bit 小立即数，仍使用原助记符，由第三操作数类型选择 `MODE[0]=1`：
 
-> *注：译码器遇到 `i` 结尾的助记符时，需提取第三个操作数作为 `cimm8` 填入 `OP2[7:0]` 字段中，不再需要后续提供单独的 MODE 字段。*
+```asm
+pmul p2, p0, 255
+pmac p2, p0, 255
+```
 
----
+`paddi`、`psubi`、`pmuli`、`pmaci` 不是体系结构指令。当前解析器也不接受 `padd/psub` 的立即数形式。对象槽位范围为 `p0` 到 `p7`，`cimm8` 范围为 0 到 255。
 
-### 2. STG 格式：Stage / Transform 执行类
-具有明显阶段性、流水化以及并行重排特征的指令操作（执行于 128 并行蝶形/重排模式）。
+## 3. STG 变换指令
 
-* **操作数格式**: `mnemonic pdata, ptwiddle, field_3, idx1, mode`
+```asm
+pntt pdata, ptwiddle, stage, idx1, mode
+pintt pdata, ptwiddle, stage, idx1, mode
+```
 
-| 汇编指令名称 | 操作数示例及意义 | 译码说明 |
+`pdata` 是原地读写的数据对象，`ptwiddle` 是当前 stage 的 twiddle 对象。`stage`、`idx1` 和 `mode` 均为 4-bit 字段。生成器在每个 stage 执行以下生命周期：
+
+```asm
+dload ..., ptwiddle, 1
+pntt pdata, ptwiddle, stage, idx1, mode
+pfree ptwiddle
+```
+
+INTT 同理。`pfree` 只释放当前 stage 的 twiddle；`pdata` 仍保留给下一 stage 或后续 `dstore`。
+
+## 4. CFG 指令
+
+### `pmodld`
+
+```asm
+pmodld psrc, idx1, cfg
+```
+
+从 `psrc` 指向的对象中装载并激活模上下文。`idx1` 为 3-bit，`cfg` 为 15-bit。
+
+### `pfree`
+
+```asm
+pfree psrc
+```
+
+`IDX0` 指定要释放的对象槽位，CFG 中其余字段必须为 0。`pfree` 按队列顺序执行，应放在该对象最后一次读取之后。示例 `pfree p4` 的当前编码为 `0x7800000B`。
+
+## 5. SYNC 指令
+
+```asm
+psync tag, mode
+```
+
+`tag` 为 5-bit，`mode` 为 3-bit。`psync` 用于此前操作的完成边界；它不能代替对象生命周期管理，临时对象仍需在最后一次使用后显式 `pfree`。
+
+## 6. custom1 DMA 指令
+
+当前项目的语法和位域保持不变：
+
+```asm
+dload  rs1, rs2, pdst, load_type
+dstore rs1, rs2, psrc, rel
+```
+
+| 指令 | 字段 | 约定 |
 | --- | --- | --- |
-| `pntt` | `pntt pdata, ptwiddle, stage, idx1, mode` | 对 `pdata` 原地变换，`ptwiddle` 为 twiddle 对象，`stage`占用专属4-bit |
-| `pintt`| `pintt pdata, ptwiddle, stage, idx1, mode` | 对 `pdata` 原地变换，`ptwiddle` 为 twiddle 对象，同上 |
-| `pshuf`| `pshuf pdst, psrc, idx0, idx1, mode` | `idx0` 为Shuffle主模式，`idx1` 为参数化索引 |
-| `psample`|`psample pdst, psrc, idx0, idx1, mode` | `psrc` 现阶段预留填0，`idx0`选择分布类型 |
+| `dload` | `load_type` | `0=seg`、`1=poly`、`2=mod_ctx`、`3=shuffle_cfg` |
+| `dstore` | `rel` | `0=写回后保留`、`1=写回完成后释放` |
 
----
+`custom1` 固定低 7-bit opcode 为 `0101011`。当前编码布局由 `encode/src/encoder.cpp` 的 `encode_dma` 定义，本次更新没有修改。
 
-### 3. CFG 格式：配置与控制类
-用于刷新 HPU 内部由于容量限制而维护的小型上下文状态（模参数、Shuffle模式及随机数种子）。
+## 7. 对象生命周期规则
 
-* **操作数格式**: `mnemonic ...`
+1. `dload` 成功后，目标对象槽位进入 live 状态；再次写同一槽位前必须确保旧对象已释放。
+2. 算术、变换和 `pmodld` 读取源对象，但不会自动释放它们。
+3. 不需要写回的输入、常量、twiddle 和模上下文，在最后一次使用后执行 `pfree`。
+4. 需要写回且之后不再使用的结果执行 `dstore ..., 1`，由 DMA 完成后释放，不能再对同一对象追加 `pfree`。
+5. 仍要复用的对象执行 `dstore ..., 0` 或暂不释放，直到真实的最后一次使用。
 
-| 汇编指令名称 | 操作数示例及意义 | 译码说明 |
-| --- | --- | --- |
-| `pmodld` | `pmodld psrc, idx1, cfg` | 从 `psrc` 槽位加载模上下文数据。`cfg` 为 15-bit 控制字 |
-| `pshcfg` | `pshcfg psrc, idx1, cfg` | 从 `psrc` 槽位装载 Shuffle 静态配置。 |
-| `pseed`  | `pseed imm21` | 特殊格式：`inst[27:7]` 全部21位用于存放随机种子 `IMM21` |
-
----
-
-### 4. SYNC 格式：同步屏障类
-通过独立收敛控制与中断线向 RISC-V 核心提供同步。
-
-* **操作数格式**: `psync tag, mode`
-
-| 汇编指令名称 | 操作数示例及意义 | 译码说明 |
-| --- | --- | --- |
-| `psync` | `psync tag, mode` | 建立同步栅栏。遇到该指令时在此前所有指令对SRAM可见前停止发射后续指令。 |
-
----
-
-### 5. custom1：外部访存操作
-用于通过 DMA 与 HPU SRAM 交互并注册对象槽位生命周期。
-
-* **操作数格式**: `mnemonic rs1, rs2, p_obj, arg4`
-
-| 汇编指令名称 | 操作数示例及意义 | 译码说明 |
-| --- | --- | --- |
-| `dload` | `dload rs1, rs2, pdst, load_type` | `DIR=0`. `load_type` 00:普通片段, 01:完整对象, 10:模上下文, 11:重排对象 |
-| `dstore`| `dstore rs1, rs2, psrc, rel` | `DIR=1`. `rel` 表示导出后是否释放槽位(0保留, 1释放) |
-
----
+完整算子流已按这些规则生成 `pfree`。RV 冒烟用例同时覆盖 `pfree` 正向编码，以及旧指令和非法 `pfree` 操作数的拒绝行为。

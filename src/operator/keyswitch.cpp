@@ -40,8 +40,6 @@ std::string generate_hpu_keyswitch_body_asm(
     const int TWIDDLE = 3; // Dummy for shuffle cfg
     const int POBJ_TMP_A = 0;
 
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
-
     asm_code << "        /* --- Decomposed digits loop (dnum = " << dnum << ") --- */\n";
     for (int d = 0; d < dnum; ++d) {
         int q_offset = d * digit_size;
@@ -58,12 +56,12 @@ std::string generate_hpu_keyswitch_body_asm(
 
         // 2. NTT
         asm_code << "        /* --- Step 2: NTT on Q and P bases --- */\n";
+        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
 
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* NTT ctx_" << i << " */\n";
             asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
             asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
-            asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
             asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
             asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 1);
         }
@@ -88,9 +86,12 @@ std::string generate_hpu_keyswitch_body_asm(
                     asm_code << hpu::dload("x0", "x0", POBJ_OUT, hpu::DataType::poly); // Load accumulated result
                     asm_code << hpu::pmac(POBJ_OUT, POBJ_CT, POBJ_EVK);
                 }
+                asm_code << hpu::pfree(POBJ_CT);
+                asm_code << hpu::pfree(POBJ_EVK);
                 asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1);
             }
         }
+        asm_code << hpu::pfree(POBJ_MOD_CTX);
     }
 
     // 4. INTT
@@ -105,11 +106,11 @@ std::string generate_hpu_keyswitch_body_asm(
             asm_code << "        /* INTT ctx_" << i << " */\n";
             asm_code << hpu::pmodld(POBJ_MOD_CTX2, i);
             asm_code << hpu::dload("x0", "x0", POBJ_TMP_A2, hpu::DataType::poly);
-            asm_code << hpu::dload("x0", "x0", TWIDDLE2, hpu::DataType::poly);
             asm_code << generate_hpu_intt_body_asm(N, POBJ_TMP_A2, TWIDDLE2, false);
             asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A2, 1);
         }
     }
+    asm_code << hpu::pfree(POBJ_MOD_CTX2);
 
     // 5. ModDown
     asm_code << "        /* --- Step 5: ModDown for both parts --- */\n";
@@ -133,9 +134,12 @@ std::string generate_hpu_keyswitch_body_asm(
         asm_code << hpu::dload("x0", "x0", POBJ_C0, hpu::DataType::poly); 
         // 3. 在片上直接相加
         asm_code << hpu::padd(POBJ_FINAL_OUT0, POBJ_OUT0, POBJ_C0);
+        asm_code << hpu::pfree(POBJ_OUT0);
+        asm_code << hpu::pfree(POBJ_C0);
         // 4. 写回主存
         asm_code << hpu::dstore("x0", "x0", POBJ_FINAL_OUT0, 1);
     }
+    asm_code << hpu::pfree(POBJ_MOD_CTX_S6);
 
     if (append_psync) {
         asm_code << hpu::psync(0);

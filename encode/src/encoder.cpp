@@ -14,12 +14,9 @@ constexpr std::uint32_t kOpcPmul = 0b0010;
 constexpr std::uint32_t kOpcPmac = 0b0011;
 constexpr std::uint32_t kOpcPntt = 0b0100;
 constexpr std::uint32_t kOpcPintt = 0b0101;
-constexpr std::uint32_t kOpcPshcfg = 0b0110;
-constexpr std::uint32_t kOpcPshuf = 0b0111;
-constexpr std::uint32_t kOpcPseed = 0b1000;
-constexpr std::uint32_t kOpcPsample = 0b1001;
-constexpr std::uint32_t kOpcPmodld = 0b1010;
-constexpr std::uint32_t kOpcPsync = 0b1011;
+constexpr std::uint32_t kOpcPmodld = 0b0110;
+constexpr std::uint32_t kOpcPfree = 0b0111;
+constexpr std::uint32_t kOpcPsync = 0b1000;
 
 void ensure_range(int value, int min_value, int max_value, const char* field_name) {
     if (value < min_value || value > max_value) {
@@ -30,53 +27,26 @@ void ensure_range(int value, int min_value, int max_value, const char* field_nam
 std::uint32_t opcode_for(Mnemonic mnemonic) {
     switch (mnemonic) {
         case Mnemonic::kPadd:
-        case Mnemonic::kPaddi:
             return kOpcPadd;
         case Mnemonic::kPsub:
-        case Mnemonic::kPsubi:
             return kOpcPsub;
         case Mnemonic::kPmul:
-        case Mnemonic::kPmuli:
             return kOpcPmul;
         case Mnemonic::kPmac:
-        case Mnemonic::kPmaci:
             return kOpcPmac;
         case Mnemonic::kPntt:
             return kOpcPntt;
         case Mnemonic::kPintt:
             return kOpcPintt;
-        case Mnemonic::kPshcfg:
-            return kOpcPshcfg;
-        case Mnemonic::kPshuf:
-            return kOpcPshuf;
-        case Mnemonic::kPseed:
-            return kOpcPseed;
-        case Mnemonic::kPsample:
-            return kOpcPsample;
         case Mnemonic::kPmodld:
             return kOpcPmodld;
+        case Mnemonic::kPfree:
+            return kOpcPfree;
         case Mnemonic::kPsync:
             return kOpcPsync;
         default:
             throw std::runtime_error("opcode is undefined for mnemonic");
     }
-}
-
-bool is_immediate_ar3(Mnemonic mnemonic) {
-    return mnemonic == Mnemonic::kPaddi || mnemonic == Mnemonic::kPsubi ||
-           mnemonic == Mnemonic::kPmuli || mnemonic == Mnemonic::kPmaci;
-}
-
-bool is_in_place_transform(Mnemonic mnemonic) {
-    return mnemonic == Mnemonic::kPntt || mnemonic == Mnemonic::kPintt;
-}
-
-const char* stg_first_operand_name(Mnemonic mnemonic) {
-    return is_in_place_transform(mnemonic) ? "pdata" : "pdst";
-}
-
-const char* stg_second_operand_name(Mnemonic mnemonic) {
-    return is_in_place_transform(mnemonic) ? "ptwiddle" : "psrc";
 }
 
 std::uint32_t encode_ar3(const Instruction& instruction) {
@@ -87,7 +57,11 @@ std::uint32_t encode_ar3(const Instruction& instruction) {
 
     std::uint32_t op2 = 0;
     std::uint32_t mode = instruction.mode;
-    if (is_immediate_ar3(instruction.mnemonic)) {
+    if (instruction.imm8 >= 0) {
+        if (instruction.mnemonic != Mnemonic::kPmul
+            && instruction.mnemonic != Mnemonic::kPmac) {
+            throw std::runtime_error("only pmul/pmac support cimm8");
+        }
         ensure_range(instruction.imm8, 0, 0xFF, "cimm8");
         op2 = static_cast<std::uint32_t>(instruction.imm8);
         mode |= 0b0001;
@@ -108,8 +82,8 @@ std::uint32_t encode_ar3(const Instruction& instruction) {
 }
 
 std::uint32_t encode_stg(const Instruction& instruction) {
-    ensure_range(instruction.pdst, 0, 7, stg_first_operand_name(instruction.mnemonic));
-    ensure_range(instruction.psrc1, 0, 7, stg_second_operand_name(instruction.mnemonic));
+    ensure_range(instruction.pdst, 0, 7, "pdata");
+    ensure_range(instruction.psrc1, 0, 7, "ptwiddle");
     ensure_range(instruction.idx0, 0, 0xF, "idx0");
     ensure_range(instruction.idx1, 0, 0xF, "idx1");
     ensure_range(instruction.mode, 0, 0xF, "mode");
@@ -128,19 +102,14 @@ std::uint32_t encode_stg(const Instruction& instruction) {
 }
 
 std::uint32_t encode_cfg(const Instruction& instruction) {
-    if (instruction.mnemonic == Mnemonic::kPseed) {
-        if (instruction.imm21 > 0x1FFFFF) {
-            throw std::runtime_error("imm21 is out of range");
-        }
-        return (opcode_for(instruction.mnemonic) << 28) |
-               (instruction.imm21 << 7) |
-               kCustom0Opcode;
-    }
-
     ensure_range(instruction.idx0, 0, 7, "idx0");
     ensure_range(instruction.idx1, 0, 7, "idx1");
     if (instruction.cfg > 0x7FFF) {
         throw std::runtime_error("cfg is out of range");
+    }
+    if (instruction.mnemonic == Mnemonic::kPfree
+        && (instruction.idx1 != 0 || instruction.cfg != 0)) {
+        throw std::runtime_error("pfree reserved fields must be zero");
     }
 
     std::uint32_t word = 0;

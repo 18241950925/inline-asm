@@ -14,30 +14,18 @@ std::string format_xreg(int value) {
     return "x" + std::to_string(value);
 }
 
-bool is_immediate_ar3(Mnemonic mnemonic) {
-    return mnemonic == Mnemonic::kPaddi || mnemonic == Mnemonic::kPsubi ||
-           mnemonic == Mnemonic::kPmuli || mnemonic == Mnemonic::kPmaci;
-}
-
 }  // namespace
 
 std::string to_string(Mnemonic mnemonic) {
     switch (mnemonic) {
         case Mnemonic::kPadd: return "padd";
-        case Mnemonic::kPaddi: return "paddi";
         case Mnemonic::kPsub: return "psub";
-        case Mnemonic::kPsubi: return "psubi";
         case Mnemonic::kPmul: return "pmul";
-        case Mnemonic::kPmuli: return "pmuli";
         case Mnemonic::kPmac: return "pmac";
-        case Mnemonic::kPmaci: return "pmaci";
         case Mnemonic::kPntt: return "pntt";
         case Mnemonic::kPintt: return "pintt";
-        case Mnemonic::kPshuf: return "pshuf";
-        case Mnemonic::kPsample: return "psample";
-        case Mnemonic::kPshcfg: return "pshcfg";
-        case Mnemonic::kPseed: return "pseed";
         case Mnemonic::kPmodld: return "pmodld";
+        case Mnemonic::kPfree: return "pfree";
         case Mnemonic::kPsync: return "psync";
         case Mnemonic::kDload: return "dload";
         case Mnemonic::kDstore: return "dstore";
@@ -49,24 +37,17 @@ std::string to_string(Mnemonic mnemonic) {
 Format instruction_format(Mnemonic mnemonic) {
     switch (mnemonic) {
         case Mnemonic::kPadd:
-        case Mnemonic::kPaddi:
         case Mnemonic::kPsub:
-        case Mnemonic::kPsubi:
         case Mnemonic::kPmul:
-        case Mnemonic::kPmuli:
         case Mnemonic::kPmac:
-        case Mnemonic::kPmaci:
             return Format::kAR3;
 
         case Mnemonic::kPntt:
         case Mnemonic::kPintt:
-        case Mnemonic::kPshuf:
-        case Mnemonic::kPsample:
             return Format::kSTG;
 
-        case Mnemonic::kPshcfg:
-        case Mnemonic::kPseed:
         case Mnemonic::kPmodld:
+        case Mnemonic::kPfree:
             return Format::kCFG;
 
         case Mnemonic::kPsync:
@@ -89,7 +70,7 @@ std::string to_string(const Instruction& instruction) {
             oss << ' ' << format_pobj(instruction.pdst)
                 << ", " << format_pobj(instruction.psrc1)
                 << ", ";
-            if (is_immediate_ar3(instruction.mnemonic)) {
+            if (instruction.imm8 >= 0) {
                 oss << instruction.imm8;
             } else {
                 oss << format_pobj(instruction.psrc2);
@@ -105,8 +86,8 @@ std::string to_string(const Instruction& instruction) {
             break;
 
         case Format::kCFG:
-            if (instruction.mnemonic == Mnemonic::kPseed) {
-                oss << ' ' << instruction.imm21;
+            if (instruction.mnemonic == Mnemonic::kPfree) {
+                oss << ' ' << format_pobj(instruction.idx0);
             } else {
                 oss << ' ' << format_pobj(instruction.idx0)
                     << ", " << instruction.idx1

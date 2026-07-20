@@ -178,31 +178,21 @@ void expect_operand_count(const std::vector<std::string>& operands,
     }
 }
 
-bool is_in_place_transform(Mnemonic mnemonic) {
-    return mnemonic == Mnemonic::kPntt || mnemonic == Mnemonic::kPintt;
-}
-
-const char* stg_first_operand_name(Mnemonic mnemonic) {
-    return is_in_place_transform(mnemonic) ? "pdata" : "pdst";
-}
-
-const char* stg_second_operand_name(Mnemonic mnemonic) {
-    return is_in_place_transform(mnemonic) ? "ptwiddle" : "psrc";
-}
-
 Instruction parse_ar3(Mnemonic mnemonic,
-                      const std::vector<std::string>& operands,
-                      bool immediate_mode) {
+                      const std::vector<std::string>& operands) {
     expect_operand_count(operands, 3, to_string(mnemonic));
 
     Instruction instruction {};
     instruction.mnemonic = mnemonic;
     instruction.pdst = parse_pobj(operands[0], "pdst");
     instruction.psrc1 = parse_pobj(operands[1], "psrc1");
-    if (immediate_mode) {
-        instruction.imm8 = parse_base0_int(operands[2], "cimm8");
-    } else {
+    if (!operands[2].empty() && operands[2].front() == 'p') {
         instruction.psrc2 = parse_pobj(operands[2], "psrc2");
+    } else {
+        if (mnemonic != Mnemonic::kPmul && mnemonic != Mnemonic::kPmac) {
+            throw std::runtime_error("only pmul/pmac support cimm8");
+        }
+        instruction.imm8 = parse_base0_int(operands[2], "cimm8");
     }
     return instruction;
 }
@@ -212,8 +202,8 @@ Instruction parse_stg(Mnemonic mnemonic, const std::vector<std::string>& operand
 
     Instruction instruction {};
     instruction.mnemonic = mnemonic;
-    instruction.pdst = parse_pobj(operands[0], stg_first_operand_name(mnemonic));
-    instruction.psrc1 = parse_pobj(operands[1], stg_second_operand_name(mnemonic));
+    instruction.pdst = parse_pobj(operands[0], "pdata");
+    instruction.psrc1 = parse_pobj(operands[1], "ptwiddle");
     instruction.idx0 = parse_base0_int(operands[2], "idx0");
     instruction.idx1 = parse_base0_int(operands[3], "idx1");
     instruction.mode = static_cast<std::uint8_t>(parse_base0_int(operands[4], "mode"));
@@ -224,9 +214,11 @@ Instruction parse_cfg(Mnemonic mnemonic, const std::vector<std::string>& operand
     Instruction instruction {};
     instruction.mnemonic = mnemonic;
 
-    if (mnemonic == Mnemonic::kPseed) {
-        expect_operand_count(operands, 1, "pseed");
-        instruction.imm21 = static_cast<std::uint32_t>(parse_base0_int(operands[0], "imm21"));
+    if (mnemonic == Mnemonic::kPfree) {
+        expect_operand_count(operands, 1, "pfree");
+        instruction.idx0 = parse_pobj(operands[0], "idx0");
+        instruction.idx1 = 0;
+        instruction.cfg = 0;
         return instruction;
     }
 
@@ -272,23 +264,15 @@ Instruction parse_instruction_line(std::string_view line) {
     const std::string operand_text = split == std::string::npos ? std::string() : normalized.substr(split + 1);
     const std::vector<std::string> operands = split_operands(operand_text);
 
-    if (mnemonic == "padd") return parse_ar3(Mnemonic::kPadd, operands, false);
-    if (mnemonic == "paddi") return parse_ar3(Mnemonic::kPaddi, operands, true);
-    if (mnemonic == "psub") return parse_ar3(Mnemonic::kPsub, operands, false);
-    if (mnemonic == "psubi") return parse_ar3(Mnemonic::kPsubi, operands, true);
-    if (mnemonic == "pmul") return parse_ar3(Mnemonic::kPmul, operands, false);
-    if (mnemonic == "pmuli") return parse_ar3(Mnemonic::kPmuli, operands, true);
-    if (mnemonic == "pmac") return parse_ar3(Mnemonic::kPmac, operands, false);
-    if (mnemonic == "pmaci") return parse_ar3(Mnemonic::kPmaci, operands, true);
+    if (mnemonic == "padd") return parse_ar3(Mnemonic::kPadd, operands);
+    if (mnemonic == "psub") return parse_ar3(Mnemonic::kPsub, operands);
+    if (mnemonic == "pmul") return parse_ar3(Mnemonic::kPmul, operands);
+    if (mnemonic == "pmac") return parse_ar3(Mnemonic::kPmac, operands);
 
     if (mnemonic == "pntt") return parse_stg(Mnemonic::kPntt, operands);
     if (mnemonic == "pintt") return parse_stg(Mnemonic::kPintt, operands);
-    if (mnemonic == "pshuf") return parse_stg(Mnemonic::kPshuf, operands);
-    if (mnemonic == "psample") return parse_stg(Mnemonic::kPsample, operands);
-
-    if (mnemonic == "pshcfg") return parse_cfg(Mnemonic::kPshcfg, operands);
-    if (mnemonic == "pseed") return parse_cfg(Mnemonic::kPseed, operands);
     if (mnemonic == "pmodld") return parse_cfg(Mnemonic::kPmodld, operands);
+    if (mnemonic == "pfree") return parse_cfg(Mnemonic::kPfree, operands);
 
     if (mnemonic == "psync") return parse_sync(operands);
 

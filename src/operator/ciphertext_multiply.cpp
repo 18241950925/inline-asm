@@ -48,6 +48,7 @@ std::string generate_basis_ntt_body_asm(
             asm_code << hpu::dstore("x0", "x0", POBJ_POLY, 1);
         }
     }
+    asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     return asm_code.str();
 }
@@ -76,6 +77,7 @@ std::string generate_basis_intt_body_asm(
             asm_code << hpu::dstore("x0", "x0", POBJ_POLY, 1);
         }
     }
+    asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     return asm_code.str();
 }
@@ -98,7 +100,6 @@ std::string generate_relinearize_t2_body_asm(
     const int POBJ_MOD_CTX = 4;
 
     asm_code << "        /* --- Relinearization: KeySwitch(t2, rlk) -> (ks0, ks1) --- */\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
 
     for (int d = 0; d < dnum; ++d) {
         const int q_offset = d * digit_size;
@@ -114,6 +115,7 @@ std::string generate_relinearize_t2_body_asm(
             false);
 
         asm_code << "        /* Step 2: NTT on decomposed t2 digit over full Q union P */\n";
+        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* base_" << i << " */\n";
             asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
@@ -136,12 +138,16 @@ std::string generate_relinearize_t2_body_asm(
                     asm_code << hpu::dload("x0", "x0", POBJ_OUT, hpu::DataType::poly);
                     asm_code << hpu::pmac(POBJ_OUT, POBJ_CT, POBJ_EVK);
                 }
+                asm_code << hpu::pfree(POBJ_CT);
+                asm_code << hpu::pfree(POBJ_EVK);
                 asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1);
             }
         }
+        asm_code << hpu::pfree(POBJ_MOD_CTX);
     }
 
     asm_code << "        /* Step 4: INTT accumulated key-switch result over Q union P */\n";
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
     for (int v = 0; v < 2; ++v) {
         asm_code << "        /* ks component " << v << " */\n";
         for (int i = 0; i < total_bases; ++i) {
@@ -152,6 +158,7 @@ std::string generate_relinearize_t2_body_asm(
             asm_code << hpu::dstore("x0", "x0", POBJ_CT, 1);
         }
     }
+    asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     asm_code << "        /* Step 5: ModDown each key-switch component Q union P -> Q */\n";
     for (int v = 0; v < 2; ++v) {
@@ -181,9 +188,12 @@ std::string generate_add_relinearized_result_body_asm(int num_q)
             asm_code << hpu::dload("x0", "x0", POBJ_LEFT, hpu::DataType::poly);
             asm_code << hpu::dload("x0", "x0", POBJ_RIGHT, hpu::DataType::poly);
             asm_code << hpu::padd(POBJ_OUT, POBJ_LEFT, POBJ_RIGHT);
+            asm_code << hpu::pfree(POBJ_LEFT);
+            asm_code << hpu::pfree(POBJ_RIGHT);
             asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1);
         }
     }
+    asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     return asm_code.str();
 }

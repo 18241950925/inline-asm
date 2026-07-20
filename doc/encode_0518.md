@@ -118,6 +118,8 @@ outputs/<case>/
 
 ## 5. 当前编码状态
 
+当前编码器只接受 11 条体系结构指令：`padd`、`psub`、`pmul`、`pmac`、`pntt`、`pintt`、`pmodld`、`pfree`、`psync`、`dload` 和 `dstore`。`pfree` 使用 CFG 格式，`IDX0` 指定释放对象，其余 CFG 字段为零。旧的 `pshcfg/pshuf/pseed/psample` 已移除并放入 RV 负例；`pmul/pmac` 的小立即数形式继续使用原助记符，不再使用 `pmuli/pmaci`。
+
 | 算子 | ASM | `.inst32` | reference test data |
 | --- | --- | --- | --- |
 | `ntt/intt/mm/bconv/pmult/cmult/modup/moddown/keyswitch` | 已生成 | 已生成 | 已生成 |
@@ -142,7 +144,7 @@ outputs/<case>/
 
 1. `dload/dstore` 的 DDR 地址寄存器和偏移 ABI；当前完整乘法中仍使用 `x0/x0` 占位。
 2. HPU_MEM CSR 数字偏移、`line_map.csv` 到指令 `rs1/rs2` 的 runtime 绑定，以及 RTL 对 V1 `mod_ctx`/DIT twiddle ABI 的签字。
-3. HPU SRAM/scratch 容量、对象槽位驻留规则与覆盖时机。
+3. HPU SRAM/scratch 容量、对象槽位驻留规则，以及 `pfree`/`dstore rel=1` 的释放完成时机。
 4. DMA 完成、`psync`、指令发射和异常处理的精确关系。
 
 完整验收项和硬件联调签字表见 `doc/HPU_TEST_DELIVERY.md`。

@@ -37,16 +37,10 @@ inline std::string dstore(const std::string& rs1, const std::string& rs2, int ps
 // ==========================================
 
 // --- AR3 格式：三对象基础算术类 ---
-// 包含 pdst, psrc1, OP2(psrc2或cimm8), MODE 共4个显式操作数字段
+// 汇编显式给出 pdst、psrc1 和 OP2；pmul/pmac 的整数 OP2 会设置 MODE[0]
 inline std::string padd(int pdst, int psrc1, int psrc2) {
     std::ostringstream ss;
     ss << "        \"padd " << pobj(pdst) << ", " << pobj(psrc1) << ", " << pobj(psrc2) << " \\n\\t\"\n";
-    return ss.str();
-}
-
-inline std::string paddi(int pdst, int psrc1, int cimm8) {
-    std::ostringstream ss;
-    ss << "        \"paddi " << pobj(pdst) << ", " << pobj(psrc1) << ", " << cimm8 << " \\n\\t\"\n";
     return ss.str();
 }
 
@@ -56,21 +50,15 @@ inline std::string psub(int pdst, int psrc1, int psrc2) {
     return ss.str();
 }
 
-inline std::string psubi(int pdst, int psrc1, int cimm8) {
-    std::ostringstream ss;
-    ss << "        \"psubi " << pobj(pdst) << ", " << pobj(psrc1) << ", " << cimm8 << " \\n\\t\"\n";
-    return ss.str();
-}
-
 inline std::string pmul(int pdst, int psrc1, int psrc2) {
     std::ostringstream ss;
     ss << "        \"pmul " << pobj(pdst) << ", " << pobj(psrc1) << ", " << pobj(psrc2) << " \\n\\t\"\n";
     return ss.str();
 }
 
-inline std::string pmuli(int pdst, int psrc1, int cimm8) {
+inline std::string pmul_imm(int pdst, int psrc1, int cimm8) {
     std::ostringstream ss;
-    ss << "        \"pmuli " << pobj(pdst) << ", " << pobj(psrc1) << ", " << cimm8 << " \\n\\t\"\n";
+    ss << "        \"pmul " << pobj(pdst) << ", " << pobj(psrc1) << ", " << cimm8 << " \\n\\t\"\n";
     return ss.str();
 }
 
@@ -80,9 +68,9 @@ inline std::string pmac(int pdst, int psrc1, int psrc2) {
     return ss.str();
 }
 
-inline std::string pmaci(int pdst, int psrc1, int cimm8) {
+inline std::string pmac_imm(int pdst, int psrc1, int cimm8) {
     std::ostringstream ss;
-    ss << "        \"pmaci " << pobj(pdst) << ", " << pobj(psrc1) << ", " << cimm8 << " \\n\\t\"\n";
+    ss << "        \"pmac " << pobj(pdst) << ", " << pobj(psrc1) << ", " << cimm8 << " \\n\\t\"\n";
     return ss.str();
 }
 
@@ -100,29 +88,16 @@ inline std::string pintt(int pdata, int ptwiddle, int stage, int idx1, int mode 
     return ss.str();
 }
 
-inline std::string pshuf(int pdst, int psrc, int idx0, int idx1, int mode = 0) {
-    std::ostringstream ss;
-    ss << "        \"pshuf " << pobj(pdst) << ", " << pobj(psrc) << ", " << idx0 << ", " << idx1 << ", " << mode << " \\n\\t\"\n";
-    return ss.str();
-}
-
-
 // --- CFG 格式：配置 / 控制类 ---
-inline std::string pshcfg(int idx0, int idx1 = 0, int cfg = 0) {
-    std::ostringstream ss;
-    ss << "        \"pshcfg " << pobj(idx0) << ", " << idx1 << ", " << cfg << " \\n\\t\"\n";
-    return ss.str();
-}
-
 inline std::string pmodld(int idx0, int idx1 = 0, int cfg = 0) {
     std::ostringstream ss;
     ss << "        \"pmodld " << pobj(idx0) << ", " << idx1 << ", " << cfg << " \\n\\t\"\n";
     return ss.str();
 }
 
-inline std::string pseed(int imm21) {
+inline std::string pfree(int idx0) {
     std::ostringstream ss;
-    ss << "        \"pseed " << imm21 << " \\n\\t\"\n";
+    ss << "        \"pfree " << pobj(idx0) << " \\n\\t\"\n";
     return ss.str();
 }
 

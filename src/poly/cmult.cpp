@@ -41,35 +41,45 @@ std::string generate_hpu_cmult_body_asm(
     const int POBJ_B = 1;
     const int POBJ_OUT = 2;
 
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
     for (int i = 0; i < num_q; ++i) {
         asm_code << "        /* q_" << i << " */\n";
 
-        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
         asm_code << hpu::pmodld(POBJ_MOD_CTX,i);
 
         // a0 * b0
         asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a0
         asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b0
         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A, POBJ_B);
+        asm_code << hpu::pfree(POBJ_A);
+        asm_code << hpu::pfree(POBJ_B);
         asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1); // store out0
 
         // a1 * b1
         asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a1
         asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b1
         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A, POBJ_B);
+        asm_code << hpu::pfree(POBJ_A);
+        asm_code << hpu::pfree(POBJ_B);
         asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1); // store out2
 
         // a0 * b1 + a1 * b0
         asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a0
         asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b1
         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A, POBJ_B);
+        asm_code << hpu::pfree(POBJ_A);
+        asm_code << hpu::pfree(POBJ_B);
         // temp result is in POBJ_OUT
         // Now compute a1 * b0 and ADD
         asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a1
         asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b0
         asm_code << hpu::pmac(POBJ_OUT, POBJ_A, POBJ_B);
+        asm_code << hpu::pfree(POBJ_A);
+        asm_code << hpu::pfree(POBJ_B);
         asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1); // store out1
     }
+
+    asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     if (append_psync) {
         asm_code << hpu::psync(0);

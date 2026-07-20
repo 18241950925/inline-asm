@@ -15,20 +15,13 @@ enum class Format {
 
 enum class Mnemonic {
     kPadd,
-    kPaddi,
     kPsub,
-    kPsubi,
     kPmul,
-    kPmuli,
     kPmac,
-    kPmaci,
     kPntt,
     kPintt,
-    kPshuf,
-    kPsample,
-    kPshcfg,
-    kPseed,
     kPmodld,
+    kPfree,
     kPsync,
     kDload,
     kDstore,
@@ -49,7 +42,6 @@ struct Instruction {
     std::uint8_t mode = 0;
     std::uint8_t flag = 0;
     std::uint16_t cfg = 0;
-    std::uint32_t imm21 = 0;
     std::uint8_t tag = 0;
 
     int rs1 = -1;

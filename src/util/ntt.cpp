@@ -41,6 +41,7 @@ std::string generate_hpu_ntt_body_asm(
         asm_code << "        // ==========================================\n";
         asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
         asm_code << hpu::pntt(data_obj, twiddle_obj, stage, 0);
+        asm_code << hpu::pfree(twiddle_obj);
     }
 
     if (append_psync) {
@@ -79,6 +80,7 @@ std::string generate_hpu_intt_body_asm(
         asm_code << "        // ==========================================\n";
         asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
         asm_code << hpu::pintt(data_obj, twiddle_obj, stage, 0);
+        asm_code << hpu::pfree(twiddle_obj);
     }
 
     if (append_psync) {
@@ -113,7 +115,11 @@ std::string generate_hpu_ntt_asm(
         N,
         obj_poly,
         twiddle_obj,
-        append_psync);
+        false);
+    asm_code << hpu::pfree(mod_ctx_obj);
+    if (append_psync) {
+        asm_code << hpu::psync(0);
+    }
     asm_code << "\n        // 结束\n";
     asm_code << "        : \n";
     asm_code << "        : \n";
@@ -148,7 +154,11 @@ std::string generate_hpu_intt_asm(
         N,
         obj_poly,
         twiddle_obj,
-        append_psync);
+        false);
+    asm_code << hpu::pfree(mod_ctx_obj);
+    if (append_psync) {
+        asm_code << hpu::psync(0);
+    }
     asm_code << "\n        // 结束\n";
     asm_code << "        : \n";
     asm_code << "        : \n";

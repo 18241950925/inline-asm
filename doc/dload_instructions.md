@@ -16,6 +16,7 @@
   - `type = poly`：加载多项式/RNS 通道数据或预计算常量（如 twiddle、qhat_inv 等）。
 - 代码中 `x0` / `x_offset` / `x_c0` / `x_ct1_up` / `x_ct1_ntt` / `x_evk` / `x_out` / `x_tmp_c0` 等仅是占位地址寄存器名，测试时需用实际的 DMA/HBM 地址替代。
 - `pmodld` 的 index 仅用于选择在 `pobj` 中的“第几个模上下文”；若上下文在连续内存中，index 与地址偏移需保持一致。
+- `dload` 使目标槽位进入 live 状态。生成器在只读输入、常量、twiddle 和模上下文的最后一次使用后发出 `pfree`；输出使用 `dstore rel=1` 时由 DMA 完成后释放，不再重复发出 `pfree`。
 - 数学 golden 使用 little-endian `uint64`；`dload` 应使用 `test_data/hardware/` 下 little-endian `uint32`、按 256B line 补齐的独立镜像或完整 `hpu_mem_image.u32.bin`。
 
 ---

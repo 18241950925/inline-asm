@@ -49,12 +49,17 @@ std::string generate_hpu_pmult_body_asm(
         asm_code << hpu::dload("x0", "x0", POBJ_CT, hpu::DataType::poly);
         asm_code << hpu::dload("x0", "x0", POBJ_PT, hpu::DataType::poly);
         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_CT, POBJ_PT);
+        asm_code << hpu::pfree(POBJ_CT);
         asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1);
 
         asm_code << hpu::dload("x0", "x0", POBJ_CT, hpu::DataType::poly);
         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_CT, POBJ_PT);
+        asm_code << hpu::pfree(POBJ_CT);
+        asm_code << hpu::pfree(POBJ_PT);
         asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1);
     }
+
+    asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     if (append_psync) {
         asm_code << hpu::psync(0);

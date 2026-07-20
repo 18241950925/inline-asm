@@ -159,6 +159,9 @@ ctest --test-dir build --output-on-failure
 - **生成与编码分层解耦：**
   `inline-asm` 仍负责汇编生成，`encode` 模块则负责解析、归一化和 32 位编码。两者保留独立边界，但通过同一 CMake 工程统一构建，从而降低汇编语义更新后生成器与编码器失配的风险。
 
+- **11 条指令与对象生命周期：**
+  当前体系结构指令固定为 `padd/psub/pmul/pmac/pntt/pintt/pmodld/pfree/psync/dload/dstore`。旧的 `pshcfg/pshuf/pseed/psample` 已从枚举和编码表移除。临时输入、twiddle 和模上下文会在最后一次使用后生成 `pfree`；以 `dstore rel=1` 导出的结果由 DMA 完成后释放，不再重复 `pfree`。
+
 - **双输入形式兼容：**
   编码器既可处理纯 ASM body，也可处理带有 `__asm__ volatile(...)` 包装的 C++ 内联汇编文本。对于 `void hpu_xxx(void) {`、`: "memory"`、`);` 等生成边界，解析器会做定向忽略；但非法汇编指令本身仍会被保留为错误。
 
@@ -172,7 +175,7 @@ ctest --test-dir build --output-on-failure
 - `N` 为 2 的幂（NTT需要传入以确定 Stage 层数）
 - 仅允许 3 个工作槽位：`p0/p1/p2`
 - 复杂算子（PMULT/CMULT/MODUP/MODDOWN）使用 `dload/dstore` 流式搬运，不在本地长期保留多基对象
-- `pmodld`/`pshcfg` 对应对象槽位已通过 `dload` 准备好模上下文与 shuffle 配置
+- `pmodld` 对应对象槽位已通过 `dload` 准备好模上下文；对象最后一次使用后通过 `pfree` 或 `dstore rel=1` 释放
 - 需要阶段收敛时使用 `psync`
 - 当前 `.inst32` 输出仅覆盖可直接完成寄存器解析的 ASM；`auto` 仍含 `x_c0`、`x_offset`、`x_out` 等符号寄存器占位符，需在完成物理寄存器分配后再编码
 - `cmult` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32` 生成链路；其中 `ciphertext_multiply` 要求 `num_q % dnum == 0` 且 `num_q + num_p <= 8`

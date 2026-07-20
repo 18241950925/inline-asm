@@ -58,6 +58,7 @@ std::string generate_hpu_bconv_contexts_body_asm(
         asm_code << hpu::dload("x0", "x0", POBJ_TMP_B, hpu::DataType::poly);
 
         asm_code << hpu::pmul(POBJ_TMP_A, POBJ_TMP_A, POBJ_TMP_B);
+        asm_code << hpu::pfree(POBJ_TMP_B);
 
         asm_code << "        // dstore x_j to tmp memory (placeholder)\n";
         asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 1);
@@ -83,11 +84,15 @@ std::string generate_hpu_bconv_contexts_body_asm(
             } else {
                 asm_code << hpu::pmac(POBJ_ACC, POBJ_TMP_A, POBJ_TMP_B);
             }
+            asm_code << hpu::pfree(POBJ_TMP_A);
+            asm_code << hpu::pfree(POBJ_TMP_B);
         }
         
         asm_code << "        // dstore Acc_i to target memory (placeholder)\n";
         asm_code << hpu::dstore("x0", "x0", POBJ_ACC, 1);
     }
+
+    asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     if (append_psync) {
         asm_code << hpu::psync(0);

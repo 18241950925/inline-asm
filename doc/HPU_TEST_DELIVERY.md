@@ -18,6 +18,8 @@ ctest --test-dir build --output-on-failure
 SOFTWARE_DELIVERY=PASS
 FHE_REFERENCE=PASS
 ASM_ENCODING=PASS
+INSTRUCTION_SET_11=PASS
+PFREE_LIFECYCLE=PASS
 RV_INTERFACE_SMOKE=PASS
 OPERATOR_UT_PACKAGES=PASS
 HARDWARE_UINT32_IMAGES=PASS
@@ -121,12 +123,12 @@ Encrypt(ctA, ctB)
 
 `outputs/rv_interface_smoke/` 包含：
 
-- `rv_interface_smoke.asm`：覆盖全部指令类别、四种 DLoad type、DStore retain/release 和最大合法字段。
+- `rv_interface_smoke.asm`：覆盖 11 条体系结构指令、四种 DLoad type、DStore retain/release 和最大合法字段。
 - `rv_interface_smoke.inst32`：对应 32-bit 指令流。
 - `test_data/expected_decode.csv`：逐条期望 word、`custom0/custom1` 路由和归一化汇编。
-- `test_data/negative_cases.asm.txt`：必须被译码器/验证器拒绝的越界用例。
+- `test_data/negative_cases.asm.txt`：包含越界用例，以及必须拒绝的旧 `pshcfg/pshuf/pseed/psample` 助记符。
 
-建议 RV 接口 IT 依次验证 decode 路由、队列 backpressure、顺序发射、`pmodld -> compute` 可见性、`dload -> compute -> dstore` ownership，以及 `psync` 中断边界。
+建议 RV 接口 IT 依次验证 decode 路由、队列 backpressure、顺序发射、`pmodld -> compute` 可见性、`dload -> compute -> pfree/dstore rel=1` ownership，以及 `psync` 中断边界。`pfree` 必须在目标对象最后一次使用后生效；已经由 `dstore rel=1` 释放的对象不得重复释放。
 
 ## 7. 硬件联调前置确认
 
@@ -135,5 +137,5 @@ Encrypt(ctA, ctB)
 1. HPU_MEM CSR 的数字偏移，以及 runtime 将 `line_map.csv` 的 offset/count 绑定到 `rs1/rs2` 的方式。
 2. RTL 接受 V1 `mod_ctx = {q, mu_lo, mu_hi, reserved}`，Barrett 定点约定为 `mu=floor(2^64/q)`。
 3. RTL 的 `pntt/pintt stage` 接受 `twiddle_map.csv` 的 DIT 次序，或明确给出所需转换；当前数据为 canonical residue，不是 Montgomery 域。
-4. ct、tensor、ModUp、rlk、KeySwitch scratch 的物理地址和生命周期。
+4. ct、tensor、ModUp、rlk、KeySwitch scratch 的物理地址，以及 RTL 对 `pfree` 和 `dstore rel=1` 生命周期语义的实现。
 5. DMA 完成、对象可用、`dstore rel` 与 `psync` 中断之间的 happens-before 关系。

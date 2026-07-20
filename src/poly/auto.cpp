@@ -54,17 +54,14 @@ std::string generate_hpu_auto_body_asm(
         // 从 HBM 加载 c0 的第 i 个通道到 SLOT_A
         asm_code << hpu::dload("x_c0", "x_offset", SLOT_A, hpu::DataType::poly);
         
-		// 加载twiddle
-		asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
         // NTT 转入频域
         asm_code << generate_hpu_ntt_body_asm(N, SLOT_A, TWIDDLE, false);
-        // 加载融合版twiddle
-		asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
         // iNTT 融合旋转因子 (完成移位并退出频域)
         asm_code << generate_hpu_intt_body_asm(N, SLOT_A, TWIDDLE, false);
         // 将旋转后的 c0 暂存回 HBM (开辟一块临时内存 "x_tmp_c0")
         asm_code << hpu::dstore("x_tmp_c0", "x_offset", SLOT_A, 1); 
     }
+    asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     asm_code << "\n        /* ========================================================== */\n";
     asm_code << "        /* --- Step 1..5: Keyswitch on ct1 (Fused Auto in NTT)        */\n";
@@ -75,14 +72,13 @@ std::string generate_hpu_auto_body_asm(
         asm_code << "        /* --- Step 1: ModUp on ct1 --- */\n";
         // ModUp 会将数据从 HBM 读出，拉伸后写回 HBM 的 "x_ct1_up"
         asm_code << generate_hpu_modup_body_asm(digit_size, num_p, q_offset, false);
+        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
 
         asm_code << "        /* --- Step 2: Fused NTT Auto on Q and P bases --- */\n";
         for (int i = 0; i < total_bases; ++i) {
             asm_code << hpu::pmodld(POBJ_MOD_CTX, mod_ctx_index(i));
             // 读入升模后的切片
             asm_code << hpu::dload("x_ct1_up", "x_offset", SLOT_A, hpu::DataType::poly);
-			// 加载twiddle
-			asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
             // 执行融合了 auto_idx 的 NTT
             asm_code << generate_hpu_ntt_body_asm(N, SLOT_A, TWIDDLE, false);
             // 将处于求值域(且已位移)的碎片写回 HBM "x_ct1_ntt"
@@ -105,25 +101,28 @@ std::string generate_hpu_auto_body_asm(
                     asm_code << hpu::dload("x_out", "x_offset", SLOT_C, hpu::DataType::poly);
                     asm_code << hpu::pmac(SLOT_C, SLOT_A, SLOT_B); // MAC 累加
                 }
+                asm_code << hpu::pfree(SLOT_A);
+                asm_code << hpu::pfree(SLOT_B);
                 // 立即将累加结果写回 HBM，释放 SRAM！
                 asm_code << hpu::dstore("x_out", "x_offset", SLOT_C, 1);
             }
         }
+        asm_code << hpu::pfree(POBJ_MOD_CTX);
     }
 
     asm_code << "\n        /* --- Step 4: INTT on the keyed outputs --- */\n";
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
     for (int v = 0; v < 2; ++v) {
         for (int i = 0; i < total_bases; ++i) {
             asm_code << hpu::pmodld(POBJ_MOD_CTX, mod_ctx_index(i));
             asm_code << hpu::dload("x_out", "x_offset", SLOT_A, hpu::DataType::poly);
             
-			// 加载twiddle
-			asm_code << hpu::dload("x0", "x0", TWIDDLE, hpu::DataType::poly);
             // 正常 iNTT 退出频域 (auto_idx = 0)
             asm_code << generate_hpu_intt_body_asm(N, SLOT_A, TWIDDLE, false);
             asm_code << hpu::dstore("x_out", "x_offset", SLOT_A, 1);
         }
     }
+    asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     asm_code << "\n        /* --- Step 5: ModDown --- */\n";
     for (int v = 0; v < 2; ++v) {
@@ -132,6 +131,7 @@ std::string generate_hpu_auto_body_asm(
     }
 
     asm_code << "\n        /* --- Step 6: Final Merge (c0 + out0) --- */\n";
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
     for (int i = 0; i < num_q; ++i) {
         asm_code << hpu::pmodld(POBJ_MOD_CTX, mod_ctx_index_q(i));
         // SLOT_A 读取 Step 5 降模后的 out0
@@ -141,10 +141,13 @@ std::string generate_hpu_auto_body_asm(
         
         // 在 SLOT_C 中相加
         asm_code << hpu::padd(SLOT_C, SLOT_A, SLOT_B);
+        asm_code << hpu::pfree(SLOT_A);
+        asm_code << hpu::pfree(SLOT_B);
         
         // 最终合规的新密文 $c_0'$ 写回主存
         asm_code << hpu::dstore("x_out", "x_offset", SLOT_C, 1);
     }
+    asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     if (append_psync) asm_code << hpu::psync(0);
 
