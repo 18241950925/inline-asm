@@ -115,7 +115,7 @@ foreach(REMOVED_MNEMONIC pshcfg pshuf pseed psample)
 endforeach()
 
 file(READ "${ROOT}/outputs/rv_interface_smoke/test_data/expected_decode.csv" RV_EXPECTED_DECODE)
-if(NOT RV_EXPECTED_DECODE MATCHES "0x7A00000B,custom0,\"pfree p5\"")
+if(NOT RV_EXPECTED_DECODE MATCHES "0x8A00000B,custom0,\"pfree p5\"")
     message(FATAL_ERROR "RV decode expectations are missing the architectural pfree encoding")
 endif()
 

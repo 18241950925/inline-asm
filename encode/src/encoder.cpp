@@ -15,8 +15,8 @@ constexpr std::uint32_t kOpcPmac = 0b0011;
 constexpr std::uint32_t kOpcPntt = 0b0100;
 constexpr std::uint32_t kOpcPintt = 0b0101;
 constexpr std::uint32_t kOpcPmodld = 0b0110;
-constexpr std::uint32_t kOpcPfree = 0b0111;
-constexpr std::uint32_t kOpcPsync = 0b1000;
+constexpr std::uint32_t kOpcPsync = 0b0111;
+constexpr std::uint32_t kOpcPfree = 0b1000;
 
 void ensure_range(int value, int min_value, int max_value, const char* field_name) {
     if (value < min_value || value > max_value) {
