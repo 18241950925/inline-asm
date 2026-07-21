@@ -44,7 +44,7 @@ std::string generate_hpu_pmult_body_asm(
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
     for (int i = 0; i < num_q; ++i) {
         asm_code << "        /* q_" << i << " */\n";
-        asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
+        asm_code << hpu::pmodld(i);
 
         asm_code << hpu::dload("x0", "x0", POBJ_CT, hpu::DataType::poly);
         asm_code << hpu::dload("x0", "x0", POBJ_PT, hpu::DataType::poly);
@@ -121,7 +121,7 @@ std::string generate_hpu_pmult_asm(
 
 //     for (int i = 0; i < num_q; ++i) {
 //         asm_code << "        /* q_" << i << " */\n";
-//         asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
+//         asm_code << hpu::pmodld(i);
 //         // Pre-NTT PT
 //         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
 //         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, POBJ_SHF, false);

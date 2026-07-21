@@ -32,7 +32,7 @@ int main()
     try {
         const std::string smoke =
             "dload x10, x11, p0, 0\n"
-            "pmodld p4, 7, 32767\n"
+            "pmodld 255\n"
             "padd p2, p0, p1\n"
             "psub p2, p0, p1\n"
             "pmul p2, p0, p1\n"
@@ -58,7 +58,9 @@ int main()
         expect_encoded("pmac p2, p0, p1", 0x3400400BU);
         expect_encoded("pntt p0, p3, 15, 0, 0", 0x40FC000BU);
         expect_encoded("pintt p0, p3, 15, 0, 0", 0x50FC000BU);
-        expect_encoded("pmodld p4, 0, 0", 0x6800000BU);
+        expect_encoded("pmodld 0", 0x6000000BU);
+        expect_encoded("pmodld 1", 0x6000400BU);
+        expect_encoded("pmodld 255", 0x603FC00BU);
         expect_encoded("pfree p4", 0x8800000BU);
         expect_encoded("psync 0, 0", 0x7000000BU);
         expect_encoded("dload x10, x11, p0, 0", 0x00B5002BU);
@@ -71,7 +73,9 @@ int main()
             "padd p0, p1, 1",
             "pmul p0, p1, 256",
             "pntt p0, p1, 16, 0, 0",
-            "pmodld p0, 8, 0",
+            "pmodld 256",
+            "pmodld -1",
+            "pmodld p0, 0, 0",
             "pfree p8",
             "pfree p0, 0, 0",
             "pshcfg p0, 0, 0",

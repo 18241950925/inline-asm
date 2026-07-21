@@ -30,7 +30,8 @@ std::string generate_hpu_hybrid_modup_body_asm(
 {
     std::ostringstream asm_code;
     if (num_q <= 0 || num_p <= 0 || num_q_digit <= 0 || q_offset < 0
-        || q_offset + num_q_digit > num_q || num_q + num_p > 8) {
+        || q_offset + num_q_digit > num_q
+        || num_q + num_p > hpu::kMaxModContexts) {
         asm_code << "        // Invalid hybrid ModUp config\n";
         return asm_code.str();
     }
@@ -77,8 +78,8 @@ std::string generate_hpu_modup_asm(
     asm_code << "void hpu_modup_Q" << num_q_digit << "_P" << num_p << "(void) {\n";
 
     if (num_q_digit <= 0 || num_p <= 0 || q_offset < 0
-        || q_offset + num_q_digit + num_p > 8) {
-        asm_code << "    // Invalid config: require positive bases within 3-bit context space\n";
+        || q_offset + num_q_digit + num_p > hpu::kMaxModContexts) {
+        asm_code << "    // Invalid config: require positive bases within 8-bit MOD_ID space\n";
         asm_code << "}\n";
         return asm_code.str();
     }

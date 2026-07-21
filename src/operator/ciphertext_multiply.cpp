@@ -21,7 +21,7 @@ bool is_power_of_two(int x)
 bool is_valid_config(int N, int num_q, int num_p, int dnum)
 {
     return is_power_of_two(N) && num_q > 0 && num_p > 0 && dnum > 0
-        && num_q % dnum == 0 && num_q + num_p <= 8;
+        && num_q % dnum == 0 && num_q + num_p <= hpu::kMaxModContexts;
 }
 
 std::string generate_basis_ntt_body_asm(
@@ -42,7 +42,7 @@ std::string generate_basis_ntt_body_asm(
         asm_code << "        /* " << label << " component_" << component << " */\n";
         for (int i = 0; i < num_q; ++i) {
             asm_code << "        /* q_" << i << " */\n";
-            asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
+            asm_code << hpu::pmodld(i);
             asm_code << hpu::dload("x0", "x0", POBJ_POLY, hpu::DataType::poly);
             asm_code << generate_hpu_ntt_body_asm(N, POBJ_POLY, POBJ_TWIDDLE, false);
             asm_code << hpu::dstore("x0", "x0", POBJ_POLY, 1);
@@ -71,7 +71,7 @@ std::string generate_basis_intt_body_asm(
         asm_code << "        /* " << label << " component_" << component << " */\n";
         for (int i = 0; i < num_q; ++i) {
             asm_code << "        /* q_" << i << " */\n";
-            asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
+            asm_code << hpu::pmodld(i);
             asm_code << hpu::dload("x0", "x0", POBJ_POLY, hpu::DataType::poly);
             asm_code << generate_hpu_intt_body_asm(N, POBJ_POLY, POBJ_TWIDDLE, false);
             asm_code << hpu::dstore("x0", "x0", POBJ_POLY, 1);
@@ -118,7 +118,7 @@ std::string generate_relinearize_t2_body_asm(
         asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* base_" << i << " */\n";
-            asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
+            asm_code << hpu::pmodld(i);
             asm_code << hpu::dload("x0", "x0", POBJ_CT, hpu::DataType::poly);
             asm_code << generate_hpu_ntt_body_asm(N, POBJ_CT, POBJ_TWIDDLE, false);
             asm_code << hpu::dstore("x0", "x0", POBJ_CT, 1);
@@ -129,7 +129,7 @@ std::string generate_relinearize_t2_body_asm(
             asm_code << "        /* rlk component " << v << " */\n";
             for (int i = 0; i < total_bases; ++i) {
                 asm_code << "        /* base_" << i << " */\n";
-                asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
+                asm_code << hpu::pmodld(i);
                 asm_code << hpu::dload("x0", "x0", POBJ_CT, hpu::DataType::poly);
                 asm_code << hpu::dload("x0", "x0", POBJ_EVK, hpu::DataType::poly);
                 if (d == 0) {
@@ -152,7 +152,7 @@ std::string generate_relinearize_t2_body_asm(
         asm_code << "        /* ks component " << v << " */\n";
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* base_" << i << " */\n";
-            asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
+            asm_code << hpu::pmodld(i);
             asm_code << hpu::dload("x0", "x0", POBJ_CT, hpu::DataType::poly);
             asm_code << generate_hpu_intt_body_asm(N, POBJ_CT, POBJ_TWIDDLE, false);
             asm_code << hpu::dstore("x0", "x0", POBJ_CT, 1);
@@ -184,7 +184,7 @@ std::string generate_add_relinearized_result_body_asm(int num_q)
         asm_code << "        /* final component " << v << " */\n";
         for (int i = 0; i < num_q; ++i) {
             asm_code << "        /* q_" << i << " */\n";
-            asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
+            asm_code << hpu::pmodld(i);
             asm_code << hpu::dload("x0", "x0", POBJ_LEFT, hpu::DataType::poly);
             asm_code << hpu::dload("x0", "x0", POBJ_RIGHT, hpu::DataType::poly);
             asm_code << hpu::padd(POBJ_OUT, POBJ_LEFT, POBJ_RIGHT);
@@ -210,7 +210,7 @@ std::string generate_hpu_ciphertext_multiply_body_asm(
     std::ostringstream asm_code;
 
     if (!is_valid_config(N, num_q, num_p, dnum)) {
-        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 8 contexts\n";
+        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 256 MOD_IDs\n";
         return asm_code.str();
     }
 
@@ -242,7 +242,7 @@ std::string generate_hpu_ciphertext_multiply_asm(
              << "_P" << num_p << "_D" << dnum << "(void) {\n";
 
     if (!is_valid_config(N, num_q, num_p, dnum)) {
-        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 8 contexts\n";
+        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 256 MOD_IDs\n";
         asm_code << "}\n";
         return asm_code.str();
     }

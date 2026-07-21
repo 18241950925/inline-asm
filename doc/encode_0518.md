@@ -118,7 +118,7 @@ outputs/<case>/
 
 ## 5. 当前编码状态
 
-当前编码器只接受 11 条体系结构指令：`padd`、`psub`、`pmul`、`pmac`、`pntt`、`pintt`、`pmodld`、`pfree`、`psync`、`dload` 和 `dstore`。`pfree` 使用 CFG 格式，`IDX0` 指定释放对象，其余 CFG 字段为零。旧的 `pshcfg/pshuf/pseed/psample` 已移除并放入 RV 负例；`pmul/pmac` 的小立即数形式继续使用原助记符，不再使用 `pmuli/pmaci`。
+当前编码器只接受 11 条体系结构指令：`padd`、`psub`、`pmul`、`pmac`、`pntt`、`pintt`、`pmodld`、`pfree`、`psync`、`dload` 和 `dstore`。`pmodld` 使用 MOD 格式，只接受一个 8-bit `MOD_ID` 并编码到 `OP2_8`；`pfree` 使用 CFG 格式，`IDX0` 指定释放对象，其余 CFG 字段为零。旧的 `pshcfg/pshuf/pseed/psample` 已移除并放入 RV 负例；`pmul/pmac` 的小立即数形式继续使用原助记符，不再使用 `pmuli/pmaci`。
 
 | 算子 | ASM | `.inst32` | reference test data |
 | --- | --- | --- | --- |
@@ -136,7 +136,7 @@ outputs/<case>/
 - `src/main.cpp`：HPU 指令流生成参数。
 - `test/reference/main.cpp`：FHE reference 和测试向量参数。
 
-`outputs/*/test_data/params.json` 是生成结果，不是输入配置，重新生成时会覆盖。修改 `N/Q/P/dnum` 时需同步修改上述两处，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 8`、所有 RNS 模数不超过 32 bit 等当前实现约束。默认完整乘法参数为 `N=4096, Q=4, P=3, dnum=2`。
+`outputs/*/test_data/params.json` 是生成结果，不是输入配置，重新生成时会覆盖。修改 `N/Q/P/dnum` 时需同步修改上述两处，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 256`、所有 RNS 模数不超过 32 bit 等当前实现约束。8 个对象槽位与 8-bit `MOD_ID` 模表是独立资源。默认完整乘法参数为 `N=4096, Q=4, P=3, dnum=2`。
 
 ## 7. 当前交付边界
 

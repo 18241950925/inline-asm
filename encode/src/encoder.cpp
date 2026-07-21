@@ -101,6 +101,16 @@ std::uint32_t encode_stg(const Instruction& instruction) {
     return word;
 }
 
+std::uint32_t encode_mod(const Instruction& instruction) {
+    ensure_range(instruction.mod_id, 0, 0xFF, "mod_id");
+
+    std::uint32_t word = 0;
+    word |= opcode_for(instruction.mnemonic) << 28;
+    word |= static_cast<std::uint32_t>(instruction.mod_id) << 14;
+    word |= kCustom0Opcode;
+    return word;
+}
+
 std::uint32_t encode_cfg(const Instruction& instruction) {
     ensure_range(instruction.idx0, 0, 7, "idx0");
     ensure_range(instruction.idx1, 0, 7, "idx1");
@@ -159,6 +169,8 @@ std::uint32_t encode_instruction(const Instruction& instruction) {
             return encode_ar3(instruction);
         case Format::kSTG:
             return encode_stg(instruction);
+        case Format::kMOD:
+            return encode_mod(instruction);
         case Format::kCFG:
             return encode_cfg(instruction);
         case Format::kSYNC:

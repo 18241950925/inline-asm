@@ -47,24 +47,18 @@
 3. 若核侧直接转发 `inst[31:7]`，则重排 STG/mode/flag；若核侧负责重排，则在 RV IT 中逐字段验证该 bridge。
 4. 生成 `expected_cmd26.csv`，覆盖所有 OPC、stage 0/15、立即数模式、flag 和保留位。
 
-### A2. `pmodld` 仍采用旧的“模上下文对象”语义（P0）
-
-本地证据：
-
-- `include/util/hpu_asm.hpp` 定义 `pmodld psrc, idx1, cfg`。
-- `encode/src/encoder.cpp` 将对象放入 `IDX0`、context index 放入 3-bit `IDX1`，并保留 15-bit `cfg`。
-- `src/operator/ciphertext_multiply.cpp` 先把模表 `dload` 到普通对象 `p4`，再调用 `pmodld(p4, i)`，并限制 `num_q + num_p <= 8`。
+### A2. `pmodld` 旧“模上下文对象”语义（已修复，2026-07-21）
 
 文档来源：《HPU 控制逻辑设计文档》“PMODLD 指令详细位段”和 `hpu_cfg_state_regs` 章节；《HPU 集成与编程手册》3.1.3、3.5.4、3.6.1。
 
-最新语义是 `OP2_8/CFG8 = MOD_ID`。`pmodld` 不从普通对象槽读取，而是从 Bank 5 固定 `MOD_TABLE_BASE_LINE=0x1400` 的模表中按 `MOD_ID` 选 line/slot。
+当前实现已经完成以下迁移：
 
-修改建议：
+1. 汇编语法改为 `pmodld mod_id`，范围 0..255；旧 `psrc/idx1/cfg15` 语法作为负例拒绝。
+2. 原始 32-bit 指令的 `MOD_ID` 编码在 `[21:14]`，去掉低 7-bit opcode 后对应内部命令 `OP2_8[14:7]`。
+3. 所有算子生成器均改为 `pmodld(i)`，不再把 `p4` 编入 `pmodld`。
+4. `num_q + num_p` 上限从旧 3-bit context 空间的 8 改为 8-bit `MOD_ID` 空间的 256；对象槽位仍独立保持 8 个。
 
-1. 将汇编语法收敛为 `pmodld mod_id`，范围 0..255；删除 `psrc/idx1/cfg15` 语义。
-2. 将 `MOD_ID` 编入内部命令 `[14:7]`，同步更新 parser、encoder、生成器和负例。
-3. 用带 small-bank hint 的 DLoad 初始化 Bank 5 模表；`pmodld` 本身不再依赖 `p4`。
-4. 删除“RNS context 数不超过 8”的错误限制；8 是运行时对象数，不是模上下文数。另按 `MOD_ID` 和 Bank 5 容量设置真实上限。
+`dload type=2` 仍使用 custom1 对象号作为模表镜像的 DMA 传输句柄。该搬运如何绑定到 Bank 5 固定 `MOD_TABLE_BASE_LINE=0x1400`，仍属于 custom1/runtime 集成项，不属于 `pmodld` 编码本身。
 
 ### A3. `pfree` 对象字段和 `psync` 载荷仍是旧格式（P0）
 
@@ -128,7 +122,7 @@
 
 ### A8. 参数检查没有覆盖本地 SRAM/PE 能力（P1）
 
-本地证据：NTT 和完整乘法只检查 N 为 2 的幂；完整乘法还把 context 数错误限制为 8。
+本地证据：NTT 和完整乘法仍主要检查 N 为 2 的幂。旧 context 数上限 8 已随 A2 修复为 8-bit `MOD_ID` 上限 256，但尚未统一检查本地 SRAM 峰值驻留等目标能力。
 
 文档来源：《HPU 集成与编程手册》3.1.2、3.4；《HPU 控制逻辑设计文档》allocator 章节。
 
@@ -173,7 +167,7 @@
 ## 5. 建议实施顺序
 
 1. 冻结 C1-C5，并形成带版本号的 machine-readable target ABI。
-2. 完成 A1-A3：重做 custom0/precode、`pmodld`、`pfree/psync` 字段及 26-bit decode 测试。
+2. 完成 A1/A3：冻结其余 custom0/precode、`pfree/psync` 字段及 26-bit decode 测试；A2 `pmodld` 已完成。
 3. 完成 A4、A6、A10：生成真实 DMA sideband、CSR 程序和可运行 host harness。
 4. 完成 A5、A7-A9：重做物理 twiddle、目标参数校验和 PE bit-exact UT。
 5. 将 `.inst32 + cmd26 + HPU_MEM image + CSR sequence + expected checkpoints` 一起接入 RTL IT；只有该流程通过后，才能把 `HARDWARE_EXECUTION` 从 `CONDITIONAL` 改为 `PASS`。

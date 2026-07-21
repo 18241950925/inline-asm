@@ -45,7 +45,7 @@ std::string generate_hpu_cmult_body_asm(
     for (int i = 0; i < num_q; ++i) {
         asm_code << "        /* q_" << i << " */\n";
 
-        asm_code << hpu::pmodld(POBJ_MOD_CTX,i);
+        asm_code << hpu::pmodld(i);
 
         // a0 * b0
         asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a0

@@ -5,6 +5,8 @@
 
 namespace hpu {
 
+inline constexpr int kMaxModContexts = 256;
+
 inline std::string pobj(int id) {
     return "p" + std::to_string(id);
 }
@@ -88,10 +90,10 @@ inline std::string pintt(int pdata, int ptwiddle, int stage, int idx1, int mode 
     return ss.str();
 }
 
-// --- CFG 格式：配置 / 控制类 ---
-inline std::string pmodld(int idx0, int idx1 = 0, int cfg = 0) {
+// --- MOD/CFG 格式：模上下文选择与对象控制 ---
+inline std::string pmodld(int mod_id) {
     std::ostringstream ss;
-    ss << "        \"pmodld " << pobj(idx0) << ", " << idx1 << ", " << cfg << " \\n\\t\"\n";
+    ss << "        \"pmodld " << mod_id << " \\n\\t\"\n";
     return ss.str();
 }
 

@@ -102,7 +102,7 @@ struct CiphertextMultiplyConfig {
 
 constexpr NttConfig kNttCfg{4096, 0, 1, 2};
 constexpr MmConfig kMmCfg{0, 1, 2, 3};
-// 为了演示 3-bit 槽位约束，示例采用 num_q = num_p = 1
+// 为了缩短独立 BConv 示例，采用 num_q = num_p = 1；模上下文使用独立 8-bit MOD_ID
 constexpr BconvConfig kBconvCfg{1, 1, 0, 1, 2, 3, 4, 5, 6};
 constexpr PmultConfig kPmultCfg{4, 0, 1, 2, 3, 4, 5};
 constexpr CmultConfig kCmultCfg{4, 0, 1, 2, 3, 4, 5, 6, 7};

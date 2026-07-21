@@ -22,7 +22,8 @@ std::string generate_hpu_auto_body_asm(
 {
     std::ostringstream asm_code;
 
-    if (num_q <= 0 || num_p <= 0 || !is_power_of_two(N) || dnum <= 0) return "";
+    if (num_q <= 0 || num_p <= 0 || !is_power_of_two(N) || dnum <= 0
+        || num_q + num_p > hpu::kMaxModContexts) return "";
 
     const int total_bases = num_q + num_p;
     const int digit_size = num_q / dnum;
@@ -43,14 +44,14 @@ std::string generate_hpu_auto_body_asm(
     const int SLOT_B = 1;       // 通用工作槽 B
     const int SLOT_C = 2;       // 累加器 / 输出槽
 	const int TWIDDLE = 3;      
-    const int POBJ_MOD_CTX = 4; // 模数上下文配置槽
+    const int POBJ_MOD_CTX = 4; // 固定模表的 custom1 DMA 传输句柄
 	asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
 
     asm_code << "        /* ========================================================== */\n";
     asm_code << "        /* --- Step 0: Manual Automorphism on c0 (NTT -> iNTT_auto)   */\n";
     asm_code << "        /* ========================================================== */\n";
     for (int i = 0; i < num_q; ++i) {
-        asm_code << hpu::pmodld(POBJ_MOD_CTX, mod_ctx_index_q(i));
+        asm_code << hpu::pmodld(mod_ctx_index_q(i));
         // 从 HBM 加载 c0 的第 i 个通道到 SLOT_A
         asm_code << hpu::dload("x_c0", "x_offset", SLOT_A, hpu::DataType::poly);
         
@@ -76,7 +77,7 @@ std::string generate_hpu_auto_body_asm(
 
         asm_code << "        /* --- Step 2: Fused NTT Auto on Q and P bases --- */\n";
         for (int i = 0; i < total_bases; ++i) {
-            asm_code << hpu::pmodld(POBJ_MOD_CTX, mod_ctx_index(i));
+            asm_code << hpu::pmodld(mod_ctx_index(i));
             // 读入升模后的切片
             asm_code << hpu::dload("x_ct1_up", "x_offset", SLOT_A, hpu::DataType::poly);
             // 执行融合了 auto_idx 的 NTT
@@ -88,7 +89,7 @@ std::string generate_hpu_auto_body_asm(
         asm_code << "        /* --- Step 3: Multiply and Accumulate with EVK --- */\n";
         for (int v = 0; v < 2; ++v) {
             for (int i = 0; i < total_bases; ++i) {
-                asm_code << hpu::pmodld(POBJ_MOD_CTX, mod_ctx_index(i));
+                asm_code << hpu::pmodld(mod_ctx_index(i));
                 
                 // SLOT_A 加载碎片; SLOT_B 加载评估密钥
                 asm_code << hpu::dload("x_ct1_ntt", "x_offset", SLOT_A, hpu::DataType::poly);
@@ -114,7 +115,7 @@ std::string generate_hpu_auto_body_asm(
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
     for (int v = 0; v < 2; ++v) {
         for (int i = 0; i < total_bases; ++i) {
-            asm_code << hpu::pmodld(POBJ_MOD_CTX, mod_ctx_index(i));
+            asm_code << hpu::pmodld(mod_ctx_index(i));
             asm_code << hpu::dload("x_out", "x_offset", SLOT_A, hpu::DataType::poly);
             
             // 正常 iNTT 退出频域 (auto_idx = 0)
@@ -133,7 +134,7 @@ std::string generate_hpu_auto_body_asm(
     asm_code << "\n        /* --- Step 6: Final Merge (c0 + out0) --- */\n";
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
     for (int i = 0; i < num_q; ++i) {
-        asm_code << hpu::pmodld(POBJ_MOD_CTX, mod_ctx_index_q(i));
+        asm_code << hpu::pmodld(mod_ctx_index_q(i));
         // SLOT_A 读取 Step 5 降模后的 out0
         asm_code << hpu::dload("x_out", "x_offset", SLOT_A, hpu::DataType::poly);
         // SLOT_B 读取 Step 0 存在临时区的旋转后的 c0
@@ -166,8 +167,9 @@ std::string generate_hpu_auto_asm(
 	asm_code << "void hpu_auto_N" << N << "_Q" << num_q << "_P" << num_p << "_D" << dnum
 			 << "_A" << auto_idx << "(void) {\n";
 
-	if (num_q <= 0 || num_p <= 0 || !is_power_of_two(N) || dnum <= 0) {
-		asm_code << "    // Invalid config: require num_q/num_p/dnum > 0 and power-of-two N\n";
+		if (num_q <= 0 || num_p <= 0 || !is_power_of_two(N) || dnum <= 0
+			|| num_q + num_p > hpu::kMaxModContexts) {
+			asm_code << "    // Invalid config: require valid N/digits and at most 256 MOD_IDs\n";
 		asm_code << "}\n";
 		return asm_code.str();
 	}

@@ -8,6 +8,7 @@ namespace hpu {
 enum class Format {
     kAR3,
     kSTG,
+    kMOD,
     kCFG,
     kSYNC,
     kDMA,
@@ -39,6 +40,7 @@ struct Instruction {
 
     int idx0 = -1;
     int idx1 = -1;
+    int mod_id = -1;
     std::uint8_t mode = 0;
     std::uint8_t flag = 0;
     std::uint16_t cfg = 0;

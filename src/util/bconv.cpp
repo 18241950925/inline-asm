@@ -9,7 +9,7 @@ namespace {
 bool valid_contexts(const std::vector<int>& contexts)
 {
     for (int context : contexts) {
-        if (context < 0 || context > 7) {
+        if (context < 0 || context >= hpu::kMaxModContexts) {
             return false;
         }
     }
@@ -27,7 +27,7 @@ std::string generate_hpu_bconv_contexts_body_asm(
 
     if (source_contexts.empty() || target_contexts.empty()
         || !valid_contexts(source_contexts) || !valid_contexts(target_contexts)) {
-        asm_code << "        // Invalid config: BConv requires non-empty 3-bit context identifiers\n";
+        asm_code << "        // Invalid config: BConv requires non-empty 8-bit MOD_ID values\n";
         return asm_code.str();
     }
 
@@ -36,14 +36,14 @@ std::string generate_hpu_bconv_contexts_body_asm(
     const int POBJ_TMP_A = 0;
     const int POBJ_TMP_B = 1;
     const int POBJ_ACC   = 2;
-    // 模上下文对象槽位
+    // type=mod_ctx 的 dload 传输句柄；pmodld 通过固定模表的 MOD_ID 选项
     const int POBJ_MOD_CTX = 4;
 
     // ==========================================
     // 阶段一：预处理 (Pre-multiply)
     // 对每个输入基 b_j 计算: x_j = [a_j * b_hat_inv] mod b_j
     // ==========================================
-    // 一次性读取所有的模上下文到对象 POBJ_MOD_CTX 中
+    // 一次性安装固定模表；POBJ_MOD_CTX 仅作为 custom1 DMA 传输句柄
     asm_code << "        // dload all mod contexts (placeholder)\n";
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
 
@@ -51,7 +51,7 @@ std::string generate_hpu_bconv_contexts_body_asm(
     for (std::size_t j = 0; j < source_contexts.size(); ++j) {
         asm_code << "        /* Source context " << source_contexts[j]
                  << ", source limb " << j << " */\n";
-        asm_code << hpu::pmodld(POBJ_MOD_CTX, source_contexts[j]);
+        asm_code << hpu::pmodld(source_contexts[j]);
 
         asm_code << "        // dload a_j and qhat_inv_j (placeholder)\n";
         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
@@ -72,7 +72,7 @@ std::string generate_hpu_bconv_contexts_body_asm(
     for (std::size_t i = 0; i < target_contexts.size(); ++i) {
         asm_code << "        /* Target context " << target_contexts[i]
                  << ", target limb " << i << " */\n";
-        asm_code << hpu::pmodld(POBJ_MOD_CTX, target_contexts[i]);
+        asm_code << hpu::pmodld(target_contexts[i]);
 
         for (std::size_t j = 0; j < source_contexts.size(); ++j) {
             asm_code << "        // dload x_j and qhat_modp_j_i (placeholder)\n";
@@ -108,8 +108,8 @@ std::string generate_hpu_bconv_body_asm(
     bool append_psync)
 {
     if (num_q <= 0 || num_p <= 0 || q_offset < 0
-        || q_offset + num_q + num_p > 8) {
-        return "        // Invalid config: require positive bases within 3-bit context space\n";
+        || q_offset + num_q + num_p > hpu::kMaxModContexts) {
+        return "        // Invalid config: require positive bases within 8-bit MOD_ID space\n";
     }
 
     std::vector<int> source_contexts;

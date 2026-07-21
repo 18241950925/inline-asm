@@ -28,8 +28,8 @@ std::string generate_hpu_keyswitch_body_asm(
     std::ostringstream asm_code;
 
     if (num_q <= 0 || num_p <= 0 || dnum <= 0 || !is_power_of_two(N)
-        || num_q % dnum != 0 || num_q + num_p > 8) {
-        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 8 contexts\n";
+        || num_q % dnum != 0 || num_q + num_p > hpu::kMaxModContexts) {
+        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 256 MOD_IDs\n";
         return asm_code.str();
     }
 
@@ -60,7 +60,7 @@ std::string generate_hpu_keyswitch_body_asm(
 
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* NTT ctx_" << i << " */\n";
-            asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
+            asm_code << hpu::pmodld(i);
             asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
             asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
             asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 1);
@@ -76,7 +76,7 @@ std::string generate_hpu_keyswitch_body_asm(
             asm_code << "        /* evk" << v << " mult for all bases */\n";
             for (int i = 0; i < total_bases; ++i) {
                 asm_code << "        /* base_" << i << " */\n";
-                asm_code << hpu::pmodld(POBJ_MOD_CTX, i);
+                asm_code << hpu::pmodld(i);
                 // IF first digit, just mul. If subsequent digits, multiply and accumulate (pmac)
                 asm_code << hpu::dload("x0", "x0", POBJ_CT, hpu::DataType::poly);
                 asm_code << hpu::dload("x0", "x0", POBJ_EVK, hpu::DataType::poly);
@@ -104,7 +104,7 @@ std::string generate_hpu_keyswitch_body_asm(
         asm_code << "        /* INTT for out" << v << " */\n";
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* INTT ctx_" << i << " */\n";
-            asm_code << hpu::pmodld(POBJ_MOD_CTX2, i);
+            asm_code << hpu::pmodld(i);
             asm_code << hpu::dload("x0", "x0", POBJ_TMP_A2, hpu::DataType::poly);
             asm_code << generate_hpu_intt_body_asm(N, POBJ_TMP_A2, TWIDDLE2, false);
             asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A2, 1);
@@ -127,7 +127,7 @@ std::string generate_hpu_keyswitch_body_asm(
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX_S6, hpu::DataType::mod_ctx);
     
     for (int i = 0; i < num_q; ++i) { // 降模后只有 num_q 个基了
-        asm_code << hpu::pmodld(POBJ_MOD_CTX_S6, i); // 切上下文
+        asm_code << hpu::pmodld(i); // 切换固定模表中的 MOD_ID
         // 1. 加载刚才 ModDown 生成的 out0
         asm_code << hpu::dload("x0", "x0", POBJ_OUT0, hpu::DataType::poly);
         // 2. 加载原始密文的 c0 分量
@@ -159,8 +159,8 @@ std::string generate_hpu_keyswitch_asm(
     asm_code << "void hpu_keyswitch_N" << N << "_Q" << num_q << "_P" << num_p << "_D" << dnum << "(void) {\n";
 
     if (num_q <= 0 || num_p <= 0 || !is_power_of_two(N) || dnum <= 0
-        || num_q % dnum != 0 || num_q + num_p > 8) {
-        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 8 contexts\n";
+        || num_q % dnum != 0 || num_q + num_p > hpu::kMaxModContexts) {
+        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 256 MOD_IDs\n";
         asm_code << "}\n";
         return asm_code.str();
     }

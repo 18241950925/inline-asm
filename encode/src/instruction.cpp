@@ -47,6 +47,8 @@ Format instruction_format(Mnemonic mnemonic) {
             return Format::kSTG;
 
         case Mnemonic::kPmodld:
+            return Format::kMOD;
+
         case Mnemonic::kPfree:
             return Format::kCFG;
 
@@ -85,14 +87,12 @@ std::string to_string(const Instruction& instruction) {
                 << ", " << static_cast<int>(instruction.mode);
             break;
 
+        case Format::kMOD:
+            oss << ' ' << instruction.mod_id;
+            break;
+
         case Format::kCFG:
-            if (instruction.mnemonic == Mnemonic::kPfree) {
-                oss << ' ' << format_pobj(instruction.idx0);
-            } else {
-                oss << ' ' << format_pobj(instruction.idx0)
-                    << ", " << instruction.idx1
-                    << ", " << instruction.cfg;
-            }
+            oss << ' ' << format_pobj(instruction.idx0);
             break;
 
         case Format::kSYNC:

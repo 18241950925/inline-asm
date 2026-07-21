@@ -210,22 +210,23 @@ Instruction parse_stg(Mnemonic mnemonic, const std::vector<std::string>& operand
     return instruction;
 }
 
+Instruction parse_mod(const std::vector<std::string>& operands) {
+    expect_operand_count(operands, 1, "pmodld");
+
+    Instruction instruction {};
+    instruction.mnemonic = Mnemonic::kPmodld;
+    instruction.mod_id = parse_base0_int(operands[0], "mod_id");
+    return instruction;
+}
+
 Instruction parse_cfg(Mnemonic mnemonic, const std::vector<std::string>& operands) {
     Instruction instruction {};
     instruction.mnemonic = mnemonic;
 
-    if (mnemonic == Mnemonic::kPfree) {
-        expect_operand_count(operands, 1, "pfree");
-        instruction.idx0 = parse_pobj(operands[0], "idx0");
-        instruction.idx1 = 0;
-        instruction.cfg = 0;
-        return instruction;
-    }
-
-    expect_operand_count(operands, 3, to_string(mnemonic));
+    expect_operand_count(operands, 1, "pfree");
     instruction.idx0 = parse_pobj(operands[0], "idx0");
-    instruction.idx1 = parse_base0_int(operands[1], "idx1");
-    instruction.cfg = static_cast<std::uint16_t>(parse_base0_int(operands[2], "cfg"));
+    instruction.idx1 = 0;
+    instruction.cfg = 0;
     return instruction;
 }
 
@@ -271,7 +272,7 @@ Instruction parse_instruction_line(std::string_view line) {
 
     if (mnemonic == "pntt") return parse_stg(Mnemonic::kPntt, operands);
     if (mnemonic == "pintt") return parse_stg(Mnemonic::kPintt, operands);
-    if (mnemonic == "pmodld") return parse_cfg(Mnemonic::kPmodld, operands);
+    if (mnemonic == "pmodld") return parse_mod(operands);
     if (mnemonic == "pfree") return parse_cfg(Mnemonic::kPfree, operands);
 
     if (mnemonic == "psync") return parse_sync(operands);
