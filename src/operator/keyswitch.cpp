@@ -29,7 +29,7 @@ std::string generate_hpu_keyswitch_body_asm(
 
     if (num_q <= 0 || num_p <= 0 || dnum <= 0 || !is_power_of_two(N)
         || num_q % dnum != 0 || num_q + num_p > hpu::kMaxModContexts) {
-        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 256 MOD_IDs\n";
+        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 128 mod contexts\n";
         return asm_code.str();
     }
 
@@ -56,7 +56,9 @@ std::string generate_hpu_keyswitch_body_asm(
 
         // 2. NTT
         asm_code << "        /* --- Step 2: NTT on Q and P bases --- */\n";
-        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                               hpu::DloadFlag::small_bank);
+        asm_code << hpu::psync();
 
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* NTT ctx_" << i << " */\n";
@@ -99,7 +101,9 @@ std::string generate_hpu_keyswitch_body_asm(
     const int POBJ_MOD_CTX2 = 4;
     const int TWIDDLE2 = 3;
     const int POBJ_TMP_A2 = 0;
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX2, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX2, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     for (int v = 0; v < 2; ++v) {
         asm_code << "        /* INTT for out" << v << " */\n";
         for (int i = 0; i < total_bases; ++i) {
@@ -124,7 +128,9 @@ std::string generate_hpu_keyswitch_body_asm(
     const int POBJ_C0 = 1;
     const int POBJ_FINAL_OUT0 = 2;
 
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX_S6, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX_S6, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     
     for (int i = 0; i < num_q; ++i) { // 降模后只有 num_q 个基了
         asm_code << hpu::pmodld(i); // 切换固定模表中的 MOD_ID
@@ -142,7 +148,7 @@ std::string generate_hpu_keyswitch_body_asm(
     asm_code << hpu::pfree(POBJ_MOD_CTX_S6);
 
     if (append_psync) {
-        asm_code << hpu::psync(0);
+        asm_code << hpu::psync();
     }
 
     return asm_code.str();
@@ -160,7 +166,7 @@ std::string generate_hpu_keyswitch_asm(
 
     if (num_q <= 0 || num_p <= 0 || !is_power_of_two(N) || dnum <= 0
         || num_q % dnum != 0 || num_q + num_p > hpu::kMaxModContexts) {
-        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 256 MOD_IDs\n";
+        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 128 mod contexts\n";
         asm_code << "}\n";
         return asm_code.str();
     }

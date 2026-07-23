@@ -37,7 +37,9 @@ std::string generate_basis_ntt_body_asm(
     const int POBJ_MOD_CTX = 4;
 
     asm_code << "        /* --- " << label << ": coefficient -> NTT domain --- */\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     for (int component = 0; component < num_components; ++component) {
         asm_code << "        /* " << label << " component_" << component << " */\n";
         for (int i = 0; i < num_q; ++i) {
@@ -66,7 +68,9 @@ std::string generate_basis_intt_body_asm(
     const int POBJ_MOD_CTX = 4;
 
     asm_code << "        /* --- " << label << ": NTT -> coefficient domain --- */\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     for (int component = 0; component < num_components; ++component) {
         asm_code << "        /* " << label << " component_" << component << " */\n";
         for (int i = 0; i < num_q; ++i) {
@@ -115,7 +119,9 @@ std::string generate_relinearize_t2_body_asm(
             false);
 
         asm_code << "        /* Step 2: NTT on decomposed t2 digit over full Q union P */\n";
-        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                               hpu::DloadFlag::small_bank);
+        asm_code << hpu::psync();
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* base_" << i << " */\n";
             asm_code << hpu::pmodld(i);
@@ -147,7 +153,9 @@ std::string generate_relinearize_t2_body_asm(
     }
 
     asm_code << "        /* Step 4: INTT accumulated key-switch result over Q union P */\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     for (int v = 0; v < 2; ++v) {
         asm_code << "        /* ks component " << v << " */\n";
         for (int i = 0; i < total_bases; ++i) {
@@ -179,7 +187,9 @@ std::string generate_add_relinearized_result_body_asm(int num_q)
     const int POBJ_MOD_CTX = 4;
 
     asm_code << "        /* --- Compose final ciphertext: (t0, t1) + KeySwitch(t2) --- */\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     for (int v = 0; v < 2; ++v) {
         asm_code << "        /* final component " << v << " */\n";
         for (int i = 0; i < num_q; ++i) {
@@ -210,7 +220,7 @@ std::string generate_hpu_ciphertext_multiply_body_asm(
     std::ostringstream asm_code;
 
     if (!is_valid_config(N, num_q, num_p, dnum)) {
-        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 256 MOD_IDs\n";
+        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 128 mod contexts\n";
         return asm_code.str();
     }
 
@@ -224,7 +234,7 @@ std::string generate_hpu_ciphertext_multiply_body_asm(
     asm_code << generate_add_relinearized_result_body_asm(num_q);
 
     if (append_psync) {
-        asm_code << hpu::psync(0);
+        asm_code << hpu::psync();
     }
 
     return asm_code.str();
@@ -242,7 +252,7 @@ std::string generate_hpu_ciphertext_multiply_asm(
              << "_P" << num_p << "_D" << dnum << "(void) {\n";
 
     if (!is_valid_config(N, num_q, num_p, dnum)) {
-        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 256 MOD_IDs\n";
+        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 128 mod contexts\n";
         asm_code << "}\n";
         return asm_code.str();
     }

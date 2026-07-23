@@ -27,7 +27,7 @@ std::string generate_hpu_bconv_contexts_body_asm(
 
     if (source_contexts.empty() || target_contexts.empty()
         || !valid_contexts(source_contexts) || !valid_contexts(target_contexts)) {
-        asm_code << "        // Invalid config: BConv requires non-empty 8-bit MOD_ID values\n";
+        asm_code << "        // Invalid config: BConv requires non-empty MOD_IDs within Bank 5 capacity\n";
         return asm_code.str();
     }
 
@@ -36,16 +36,18 @@ std::string generate_hpu_bconv_contexts_body_asm(
     const int POBJ_TMP_A = 0;
     const int POBJ_TMP_B = 1;
     const int POBJ_ACC   = 2;
-    // type=mod_ctx 的 dload 传输句柄；pmodld 通过固定模表的 MOD_ID 选项
+    // 模表对象通过 small-bank hint 分配到 Bank 5，pmodld 再按 MOD_ID 选择表项。
     const int POBJ_MOD_CTX = 4;
 
     // ==========================================
     // 阶段一：预处理 (Pre-multiply)
     // 对每个输入基 b_j 计算: x_j = [a_j * b_hat_inv] mod b_j
     // ==========================================
-    // 一次性安装固定模表；POBJ_MOD_CTX 仅作为 custom1 DMA 传输句柄
+    // 一次性加载模表对象，并等待 Bank 5 中的数据有效。
     asm_code << "        // dload all mod contexts (placeholder)\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
 
     asm_code << "        /* --- STAGE 1: Precompute in source basis --- */\n";
     for (std::size_t j = 0; j < source_contexts.size(); ++j) {
@@ -95,7 +97,7 @@ std::string generate_hpu_bconv_contexts_body_asm(
     asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     if (append_psync) {
-        asm_code << hpu::psync(0);
+        asm_code << hpu::psync();
     }
 
     return asm_code.str();
@@ -109,7 +111,7 @@ std::string generate_hpu_bconv_body_asm(
 {
     if (num_q <= 0 || num_p <= 0 || q_offset < 0
         || q_offset + num_q + num_p > hpu::kMaxModContexts) {
-        return "        // Invalid config: require positive bases within 8-bit MOD_ID space\n";
+        return "        // Invalid config: require positive bases within the 128-context Bank 5 capacity\n";
     }
 
     std::vector<int> source_contexts;

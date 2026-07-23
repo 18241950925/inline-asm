@@ -25,54 +25,81 @@ void expect_encoded(const std::string& source, std::uint32_t expected)
     }
 }
 
+void expect_precoded(const std::string& source,
+                     std::uint32_t expected_word,
+                     std::uint32_t expected_command26)
+{
+    const hpu::EncodedInstruction encoded = hpu::assemble_line(source);
+    if (encoded.word != expected_word || encoded.command26 != expected_command26) {
+        throw std::runtime_error("unexpected instruction/precode encoding for: " + source);
+    }
+}
+
 } // namespace
 
 int main()
 {
     try {
         const std::string smoke =
-            "dload x10, x11, p0, 0\n"
+            "dload x10, x11, p0, 0, 0\n"
+            "dload x10, x11, p4, 2, 1\n"
             "pmodld 255\n"
             "padd p2, p0, p1\n"
             "psub p2, p0, p1\n"
             "pmul p2, p0, p1\n"
             "pmac p2, p0, p1\n"
-            "pntt p0, p3, 15, 15, 15\n"
-            "pintt p0, p3, 15, 15, 15\n"
+            "pntt p0, p3, 15, 3, 1\n"
+            "pintt p0, p3, 15, 3, 1\n"
             "pfree p5\n"
-            "psync 31, 7\n"
+            "psync\n"
             "dstore x10, x11, p2, 1\n";
         const auto encoded = hpu::assemble_source(smoke);
-        if (encoded.size() != 11) {
+        if (encoded.size() != 12) {
             throw std::runtime_error("unexpected smoke instruction count");
         }
         if ((encoded.front().word & 0x7fU) != 0x2bU
             || (encoded.back().word & 0x7fU) != 0x2bU
-            || (encoded[1].word & 0x7fU) != 0x0bU) {
+            || (encoded[2].word & 0x7fU) != 0x0bU) {
             throw std::runtime_error("custom opcode routing mismatch");
+        }
+        for (const auto& item : encoded) {
+            const std::uint32_t expected_kind =
+                (item.word & 0x7fU) == 0x2bU ? 1U : 0U;
+            if ((item.command26 >> 25U) != expected_kind) {
+                throw std::runtime_error("command kind is not encoded in cmd[25]");
+            }
+            if (expected_kind == 0U && item.command26 != (item.word >> 7U)) {
+                throw std::runtime_error("custom0 payload precode mismatch");
+            }
         }
 
         expect_encoded("padd p2, p0, p1", 0x0400400BU);
         expect_encoded("psub p2, p0, p1", 0x1400400BU);
         expect_encoded("pmul p2, p0, p1", 0x2400400BU);
         expect_encoded("pmac p2, p0, p1", 0x3400400BU);
-        expect_encoded("pntt p0, p3, 15, 0, 0", 0x40FC000BU);
-        expect_encoded("pintt p0, p3, 15, 0, 0", 0x50FC000BU);
+        expect_encoded("pntt p0, p3, 15, 0, 0", 0x40C03C0BU);
+        expect_encoded("pintt p0, p3, 15, 0, 0", 0x50C03C0BU);
         expect_encoded("pmodld 0", 0x6000000BU);
         expect_encoded("pmodld 1", 0x6000400BU);
         expect_encoded("pmodld 255", 0x603FC00BU);
-        expect_encoded("pfree p4", 0x8800000BU);
-        expect_encoded("psync 0, 0", 0x7000000BU);
-        expect_encoded("dload x10, x11, p0, 0", 0x00B5002BU);
+        expect_encoded("pfree p4", 0x8100000BU);
+        expect_encoded("psync", 0x7000000BU);
+        expect_precoded("padd p2, p0, p1", 0x0400400BU, 0x0080080U);
+        expect_precoded("pmodld 255", 0x603FC00BU, 0x0C07F80U);
+        expect_precoded("dload x10, x11, p0, 0, 0", 0x00B5002BU, 0x2000000U);
+        expect_precoded("dload x10, x11, p4, 2, 1", 0x00B5292BU, 0x2000424U);
+        expect_precoded("dstore x10, x11, p2, 1", 0x00B5542BU, 0x2000015U);
         expect_encoded("dstore x10, x11, p2, 1", 0x00B5542BU);
-        expect_encoded("pmul p2, p0, 255", 0x243FC40BU);
-        expect_encoded("pmac p2, p0, 255", 0x343FC40BU);
+        expect_encoded("pmul p2, p0, 255", 0x243FC10BU);
+        expect_encoded("pmac p2, p0, 255", 0x343FC10BU);
 
         const std::vector<std::string> invalid{
             "padd p8, p0, p1",
             "padd p0, p1, 1",
             "pmul p0, p1, 256",
             "pntt p0, p1, 16, 0, 0",
+            "pntt p0, p1, 0, 4, 0",
+            "pntt p0, p1, 0, 0, 2",
             "pmodld 256",
             "pmodld -1",
             "pmodld p0, 0, 0",
@@ -82,10 +109,13 @@ int main()
             "pshuf p0, p1, 0, 0, 0",
             "pseed 0",
             "psample p0, p1, 0, 0, 0",
-            "psync 32, 0",
-            "dload x32, x0, p0, 0",
-            "dload x0, x0, p0, 4",
+            "psync 0, 0",
+            "dload x32, x0, p0, 0, 0",
+            "dload x0, x0, p0, 4, 0",
+            "dload x0, x0, p0, 0",
+            "dload x0, x0, p0, 2, 2",
             "dstore x0, x0, p0, 2",
+            "dstore x0, x0, p0, 1, 1",
         };
         for (const std::string& source : invalid) {
             expect_rejected(source);

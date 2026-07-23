@@ -5,7 +5,9 @@
 
 namespace hpu {
 
-inline constexpr int kMaxModContexts = 256;
+inline constexpr int kSmallBankLines = 8;
+inline constexpr int kModContextsPerLine = 16;
+inline constexpr int kMaxModContexts = kSmallBankLines * kModContextsPerLine;
 
 inline std::string pobj(int id) {
     return "p" + std::to_string(id);
@@ -22,9 +24,20 @@ enum class DataType {
     shuffle_cfg = 3
 };
 
-inline std::string dload(const std::string& rs1, const std::string& rs2, int pdst, DataType load_type) {
+enum class DloadFlag {
+    regular_bank = 0,
+    small_bank = 1
+};
+
+inline std::string dload(
+    const std::string& rs1,
+    const std::string& rs2,
+    int pdst,
+    DataType load_type,
+    DloadFlag flag = DloadFlag::regular_bank) {
     std::ostringstream ss;
-    ss << "        \"dload " << rs1 << ", " << rs2 << ", " << pobj(pdst) << ", " << static_cast<int>(load_type) << " \\n\\t\"\n";
+    ss << "        \"dload " << rs1 << ", " << rs2 << ", " << pobj(pdst) << ", "
+       << static_cast<int>(load_type) << ", " << static_cast<int>(flag) << " \\n\\t\"\n";
     return ss.str();
 }
 
@@ -77,16 +90,19 @@ inline std::string pmac_imm(int pdst, int psrc1, int cimm8) {
 }
 
 // --- STG 格式：stage / transform 执行类 ---
-// 语义：第一个对象为原地数据对象，第二个对象为 twiddle 对象
-inline std::string pntt(int pdata, int ptwiddle, int stage, int idx1, int mode = 0) {
+// 语义：第一个对象为逻辑数据对象，第二个对象为 twiddle 对象。
+// 控制器可在保持逻辑对象号不变的情况下重分配数据对象的物理 base。
+inline std::string pntt(int pdata, int ptwiddle, int stage, int mode = 0, int flag = 0) {
     std::ostringstream ss;
-    ss << "        \"pntt " << pobj(pdata) << ", " << pobj(ptwiddle) << ", " << stage << ", " << idx1 << ", " << mode << " \\n\\t\"\n";
+    ss << "        \"pntt " << pobj(pdata) << ", " << pobj(ptwiddle) << ", " << stage
+       << ", " << mode << ", " << flag << " \\n\\t\"\n";
     return ss.str();
 }
 
-inline std::string pintt(int pdata, int ptwiddle, int stage, int idx1, int mode = 0) {
+inline std::string pintt(int pdata, int ptwiddle, int stage, int mode = 0, int flag = 0) {
     std::ostringstream ss;
-    ss << "        \"pintt " << pobj(pdata) << ", " << pobj(ptwiddle) << ", " << stage << ", " << idx1 << ", " << mode << " \\n\\t\"\n";
+    ss << "        \"pintt " << pobj(pdata) << ", " << pobj(ptwiddle) << ", " << stage
+       << ", " << mode << ", " << flag << " \\n\\t\"\n";
     return ss.str();
 }
 
@@ -104,10 +120,8 @@ inline std::string pfree(int idx0) {
 }
 
 // --- SYNC 格式：同步屏障类 ---
-inline std::string psync(int tag, int mode = 0) {
-    std::ostringstream ss;
-    ss << "        \"psync " << tag << ", " << mode << " \\n\\t\"\n";
-    return ss.str();
+inline std::string psync() {
+    return "        \"psync \\n\\t\"\n";
 }
 
 } // namespace hpu

@@ -11,12 +11,13 @@
 
 ## 通用约定
 
-- `dload(rs1, rs2, pobj, type)` 仅代表“外部访存读取到片上对象槽位”的占位行为：
-  - `type = mod_ctx`：将模数和 Barrett 参数安装到 Bank 5 固定模上下文表；`pobj` 是 DMA 传输句柄。
+- `dload(rs1, rs2, pobj, type, small_bank)` 表示“为逻辑对象分配片上 SRAM 并从外存搬入数据”：
+  - `type = mod_ctx, small_bank = 1`：对象状态表仍以 `pobj` 维护 `ALLOC/V/busy/base/len`，allocator 使用 `flag[0]` 将其物理 base 分配到 small Bank 5。
   - `type = poly`：加载多项式/RNS 通道数据或预计算常量（如 twiddle、qhat_inv 等）。
 - 代码中 `x0` / `x_offset` / `x_c0` / `x_ct1_up` / `x_ct1_ntt` / `x_evk` / `x_out` / `x_tmp_c0` 等仅是占位地址寄存器名，测试时需用实际的 DMA/HBM 地址替代。
-- `pmodld MOD_ID` 不读取 `pobj`，而是按 8-bit `MOD_ID` 从固定模表中选择上下文；模表中 context 的物理顺序必须与生成器使用的 `MOD_ID` 一致。
-- `dload` 使传输目标槽位进入 live 状态。生成器在只读输入、常量、twiddle 和模表传输句柄最后一次使用后发出 `pfree`；输出使用 `dstore rel=1` 时由 DMA 完成后释放，不再重复发出 `pfree`。
+- 模表 dload 后必须先执行 `psync`，再执行 `pmodld MOD_ID`。`pmodld` 不携带 `pobj`，而是按 MOD_ID 从 `mod_table_base_line` 选择上下文；模表物理顺序必须与 MOD_ID 一致。
+- `dload` 使目标逻辑对象进入 live 状态。生成器在只读输入、常量、twiddle和模表对象最后一次使用后发出 `pfree`；输出使用 `dstore rel=1` 时由 DMA 完成后释放，不再重复发出 `pfree`。
+- 当前 `SMALL_BANK_LINES=8`，每 line 容纳 16 个 context，因此模表物理上限是 128 个上下文。
 - 数学 golden 使用 little-endian `uint64`；`dload` 应使用 `test_data/hardware/` 下 little-endian `uint32`、按 256B line 补齐的独立镜像或完整 `hpu_mem_image.u32.bin`。
 
 ---
@@ -29,7 +30,7 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 预处理阶段开头 | `POBJ_MOD_CTX` | **完整固定模表镜像**（输入 Q 与目标 P） | `POBJ_MOD_CTX` 是传输句柄；后续按 `MOD_ID` 选择 `q_j / p_i` |
+| 预处理阶段开头 | `POBJ_MOD_CTX` | **完整模表镜像**（输入 Q 与目标 P） | 使用 `type=2, small_bank=1` 分配到 Bank 5；同步后按 `MOD_ID` 选择 |
 | Stage 1: 每个 `q_j` | `POBJ_TMP_A` | `a_j`（输入多项式在 `q_j` 上的通道） | 注释中 `a_j` |
 | Stage 1: 每个 `q_j` | `POBJ_TMP_B` | `qhat_inv_j` | 用于 `a_j * qhat_inv_j mod q_j` |
 | Stage 2: 每个 `p_i`、每个 `q_j` | `POBJ_TMP_A` | `x_j`（Stage 1 输出的临时结果） | 注释中 `x_j` |
@@ -63,7 +64,7 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| Stage 2 每个 `q_i` | `POBJ_MOD_CTX` | **完整 Q 模表镜像** | 传输句柄；`pmodld MOD_ID` 切换 `q_i` |
+| Stage 2 每个 `q_i` | `POBJ_MOD_CTX` | **完整 Q 模表镜像** | Bank 5 模表对象；`pmodld MOD_ID` 切换 `q_i` |
 | Stage 2 每个 `q_i` | `POBJ_Q` | `q` 基下的当前密文分量 | 被修正的输入 |
 | Stage 2 每个 `q_i` | `POBJ_CORR` | correction term（由 Stage 1 产生） | `q - corr` |
 | Stage 2 每个 `q_i` | `POBJ_P_INV` | `P^{-1} mod q_i` | 用于乘回缩放 |
@@ -77,7 +78,7 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个 `q_i` | `POBJ_MOD_CTX` | **完整 Q 模表镜像** | 传输句柄；`pmodld MOD_ID` 选择 `q_i` |
+| 每个 `q_i` | `POBJ_MOD_CTX` | **完整 Q 模表镜像** | Bank 5 模表对象；`pmodld MOD_ID` 选择 `q_i` |
 | 乘 `a0*b0` | `POBJ_A` / `POBJ_B` | `a0` / `b0` | 同一 `q_i` 基 |
 | 乘 `a1*b1` | `POBJ_A` / `POBJ_B` | `a1` / `b1` | 同一 `q_i` 基 |
 | 乘 `a0*b1` | `POBJ_A` / `POBJ_B` | `a0` / `b1` | 同一 `q_i` 基 |
@@ -92,7 +93,7 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 开头 | `POBJ_MOD_CTX` | **完整 Q 模表镜像** | 传输句柄；`pmodld MOD_ID` 切换 `q_i` |
+| 开头 | `POBJ_MOD_CTX` | **完整 Q 模表镜像** | Bank 5 模表对象；`pmodld MOD_ID` 切换 `q_i` |
 | 每个 `q_i` 第一次 | `POBJ_CT` | `ct0`（第 0 分量） | 同一 `q_i` 基 |
 | 每个 `q_i` 第一次 | `POBJ_PT` | `pt`（明文多项式） | 同一 `q_i` 基 |
 | 每个 `q_i` 第二次 | `POBJ_CT` | `ct1`（第 1 分量） | 同一 `q_i` 基 |
@@ -110,7 +111,7 @@
 | --- | --- | --- | --- |
 | 每个 stage | `twiddle_obj` | NTT/INTT twiddle 表 | 每个 stage 都会加载一次 |
 
-> 备注：函数为**原地变换**，第一个对象槽位为数据对象，第二个对象槽位为 twiddle。函数内对模上下文只给出注释占位，实际 `mod_ctx` 需由调用方在外层加载。
+> 备注：第一个槽位是跨 stage 保持不变的**逻辑数据对象**，第二个槽位是 twiddle。控制器可以为数据对象重分配物理 base；函数内对模上下文只给出注释占位，实际 `mod_ctx` 需由调用方在外层加载。
 
 ---
 

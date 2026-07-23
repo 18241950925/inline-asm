@@ -34,6 +34,15 @@ constexpr U64 kFnv1a64OffsetBasis = 14695981039346656037ULL;
 constexpr std::size_t kHpuWordsPerLine = 64;
 constexpr U64 kHpuLineBytes = kHpuWordsPerLine * sizeof(U32);
 constexpr U64 kHpuMemBase = 0x10000000ULL;
+constexpr std::size_t kModContextWords = 4;
+constexpr std::size_t kSmallBankLines = 8;
+constexpr std::size_t kModContextsPerLine =
+    kHpuWordsPerLine / kModContextWords;
+constexpr std::size_t kMaxModContexts =
+    kSmallBankLines * kModContextsPerLine;
+
+static_assert(kNumQ + kNumP <= kMaxModContexts,
+              "Q union P mod contexts exceed the Bank 5 small-bank capacity");
 
 struct Artifact {
     std::string path;
@@ -802,6 +811,9 @@ void write_hardware_package(const std::filesystem::path& test_data_root,
     if (moduli.empty() || moduli.size() != roots.size()) {
         throw std::runtime_error("hardware package requires one primitive root per modulus");
     }
+    if (moduli.size() > kMaxModContexts) {
+        throw std::runtime_error("mod contexts exceed the 8-line Bank 5 capacity");
+    }
     if (kN == 0 || (kN & (kN - 1)) != 0) {
         throw std::runtime_error("hardware stage twiddles require power-of-two N");
     }
@@ -1009,7 +1021,13 @@ void write_hardware_package(const std::filesystem::path& test_data_root,
         << "  \"line_words\": " << kHpuWordsPerLine << ",\n"
         << "  \"line_offset_origin\": \"HPU_MEM base address\",\n"
         << "  \"mod_ctx\": {\n"
-        << "    \"record_words\": 4,\n"
+        << "    \"record_words\": " << kModContextWords << ",\n"
+        << "    \"dload_type\": 2,\n"
+        << "    \"dload_flag0_small_bank\": 1,\n"
+        << "    \"small_bank_id\": 5,\n"
+        << "    \"small_bank_lines\": " << kSmallBankLines << ",\n"
+        << "    \"contexts_per_line\": " << kModContextsPerLine << ",\n"
+        << "    \"max_contexts\": " << kMaxModContexts << ",\n"
         << "    \"word_0\": \"q (uint32)\",\n"
         << "    \"word_1\": \"floor(2^64/q)[31:0]\",\n"
         << "    \"word_2\": \"floor(2^64/q)[63:32]\",\n"
@@ -1047,6 +1065,8 @@ void write_hardware_package(const std::filesystem::path& test_data_root,
                "`line_map.csv` for `cmd_mem_line_offset` and `cmd_mem_len_lines`.\n\n"
                "`images/` contains independently loadable, line-padded forms of the uint64 "
                "mathematical golden. `mod_ctx_map.csv` documents q and Barrett mu records. "
+               "Load that image with dload type=2 and flag[0]=1 so the object allocator "
+               "places it in small Bank 5; wait for DMA completion before pmodld. "
                "`twiddle_map.csv` gives each modulus, direction, phase, stage, line offset, "
                "and line count. Every individual binary has an annotated hex view.\n\n"
                "The physical host-memory ABI in `abi.json` is complete. Numeric CSR offsets, "
@@ -1422,7 +1442,7 @@ void generate(const std::filesystem::path& output_root,
         "key so failures are bit-exact and easy to localize. They are not security test vectors. "
         "`memory_map.json` points to the generated uint32/256-byte host-memory layout. RTL owners "
         "still must confirm numeric CSR offsets, instruction register binding, scratch addresses, "
-        "and completion semantics before direct hardware execution.\n";
+        "and mod_table_base_line binding before direct hardware execution.\n";
     write_text(output_root / "README.md", readme);
     write_text(output_root / "VALIDATION.txt",
                "PASS\nrelinearized_decryption == tensor_decryption\n"

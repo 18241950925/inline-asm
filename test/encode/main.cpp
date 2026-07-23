@@ -60,6 +60,15 @@ std::string format_word_bits(std::uint32_t word) {
     return bits;
 }
 
+std::string format_command_bits(std::uint32_t command) {
+    std::string bits;
+    bits.reserve(26);
+    for (int bit = 25; bit >= 0; --bit) {
+        bits.push_back(((command >> bit) & 1U) ? '1' : '0');
+    }
+    return bits;
+}
+
 std::string csv_field(std::string value) {
     std::string escaped;
     escaped.reserve(value.size() + 2);
@@ -83,6 +92,18 @@ void write_inst32(const std::filesystem::path& path,
 
     for (const auto& item : encoded) {
         output << format_word_bits(item.word) << '\n';
+    }
+}
+
+void write_cmd26(const std::filesystem::path& path,
+                 const std::vector<hpu::EncodedInstruction>& encoded) {
+    std::ofstream output(path);
+    if (!output) {
+        throw std::runtime_error("failed to open output file: " + path.string());
+    }
+
+    for (const auto& item : encoded) {
+        output << format_command_bits(item.command26) << '\n';
     }
 }
 
@@ -114,18 +135,21 @@ void encode_output(const std::filesystem::path& outputs_root,
     const auto case_dir = outputs_root / stem;
     const auto input_path = case_dir / (stem + ".asm");
     const auto output_path = case_dir / (stem + ".inst32");
+    const auto command_path = case_dir / (stem + ".cmd26");
     const auto encoded = hpu::assemble_source(read_all(input_path));
     write_inst32(output_path, encoded);
+    write_cmd26(command_path, encoded);
     std::cout << "Encoded " << input_path << " -> " << output_path
-              << " (" << encoded.size() << " instructions)\n";
+              << " and " << command_path << " (" << encoded.size()
+              << " instructions)\n";
 }
 
 void write_rv_interface_smoke(const std::filesystem::path& outputs_root) {
     const std::string source =
-        "dload x10, x11, p0, 0\n"
-        "dload x10, x11, p1, 1\n"
-        "dload x10, x11, p4, 2\n"
-        "dload x10, x11, p5, 3\n"
+        "dload x10, x11, p0, 0, 0\n"
+        "dload x10, x11, p1, 1, 0\n"
+        "dload x10, x11, p4, 2, 1\n"
+        "dload x10, x11, p5, 3, 1\n"
         "pmodld 255\n"
         "padd p2, p0, p1\n"
         "psub p2, p0, p1\n"
@@ -134,10 +158,10 @@ void write_rv_interface_smoke(const std::filesystem::path& outputs_root) {
         "pmac p2, p0, p1\n"
         "pmac p2, p0, 255\n"
         "pntt p0, p3, 0, 0, 0\n"
-        "pntt p0, p3, 15, 15, 15\n"
+        "pntt p0, p3, 15, 3, 1\n"
         "pintt p0, p3, 0, 0, 0\n"
         "pfree p5\n"
-        "psync 31, 7\n"
+        "psync\n"
         "dstore x10, x11, p2, 0\n"
         "dstore x10, x11, p2, 1\n";
 
@@ -151,14 +175,28 @@ void write_rv_interface_smoke(const std::filesystem::path& outputs_root) {
 
     const auto encoded = hpu::assemble_source(source);
     write_inst32(case_dir / "rv_interface_smoke.inst32", encoded);
+    write_cmd26(case_dir / "rv_interface_smoke.cmd26", encoded);
 
     std::ofstream decode(test_data_dir / "expected_decode.csv");
-    decode << "index,word_hex,opcode_class,normalized_asm\n";
+    decode << "index,word_hex,command26_hex,opcode_class,normalized_asm\n";
+    std::ofstream command_decode(test_data_dir / "expected_cmd26.csv");
+    command_decode
+        << "index,command26_hex,custom_kind,command_payload25_hex,"
+           "source_inst31_7_hex,normalized_asm\n";
     for (std::size_t i = 0; i < encoded.size(); ++i) {
         const auto opcode = encoded[i].word & 0x7fU;
+        const auto custom_kind = opcode == 0x2bU ? 1U : 0U;
         decode << i << ',' << hpu::format_word_hex(encoded[i].word) << ','
+               << hpu::format_command26_hex(encoded[i].command26) << ','
                << (opcode == 0x0bU ? "custom0" : "custom1") << ','
                << csv_field(encoded[i].normalized_asm) << '\n';
+        command_decode << i << ','
+                       << hpu::format_command26_hex(encoded[i].command26) << ','
+                       << custom_kind << ','
+                       << hpu::format_command26_hex(
+                              encoded[i].command26 & 0x1FFFFFFU) << ','
+                       << hpu::format_command26_hex(encoded[i].word >> 7U) << ','
+                       << csv_field(encoded[i].normalized_asm) << '\n';
     }
 
     std::ofstream negative(test_data_dir / "negative_cases.asm.txt");
@@ -167,6 +205,8 @@ void write_rv_interface_smoke(const std::filesystem::path& outputs_root) {
              << "padd p0, p1, 1\n"
              << "pmul p0, p1, 256\n"
              << "pntt p0, p1, 16, 0, 0\n"
+             << "pntt p0, p1, 0, 4, 0\n"
+             << "pntt p0, p1, 0, 0, 2\n"
              << "pmodld 256\n"
              << "pmodld -1\n"
              << "pmodld p0, 0, 0\n"
@@ -176,10 +216,13 @@ void write_rv_interface_smoke(const std::filesystem::path& outputs_root) {
              << "pshuf p0, p1, 0, 0, 0\n"
              << "pseed 0\n"
              << "psample p0, p1, 0, 0, 0\n"
-             << "psync 32, 0\n"
-             << "dload x32, x0, p0, 0\n"
-             << "dload x0, x0, p0, 4\n"
-             << "dstore x0, x0, p0, 2\n";
+             << "psync 0, 0\n"
+             << "dload x32, x0, p0, 0, 0\n"
+             << "dload x0, x0, p0, 4, 0\n"
+             << "dload x0, x0, p0, 0\n"
+             << "dload x0, x0, p0, 2, 2\n"
+             << "dstore x0, x0, p0, 2\n"
+             << "dstore x0, x0, p0, 1, 1\n";
 
     std::cout << "Generated RV interface smoke stream (" << encoded.size()
               << " instructions) in " << case_dir << '\n';

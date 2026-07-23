@@ -1,8 +1,8 @@
 # HPU 软件编程手册
 
-版本：0.1  
-适用实现：`inline-asm` 当前软件实现  
-日期：2026-07-21
+版本：0.2
+适用实现：`inline-asm` 当前软件实现
+日期：2026-07-23
 
 ## 前言
 
@@ -16,7 +16,7 @@
 - `include/util/hpu_asm.hpp`：算子生成器使用的汇编封装。
 - `src/`：算子级和完整密文乘法指令流。
 
-除特别说明外，本文中的“当前实现”均指上述软件实现，而不是尚未冻结的最终 RTL ABI。当前 `pmodld` 已采用 8-bit `MOD_ID` 和固定模表语义；其余 32-bit 指令到 HPU 内部 26-bit 命令的 precode 映射及 custom1 核内接口仍需与硬件版本统一，详见 `HPU_LATEST_SPEC_AUDIT.md`。
+除特别说明外，本文中的“当前实现”均指上述软件实现。26-bit HPU 命令以 `cmd26[25]` 区分 custom0/custom1；custom0 的 `inst[31:7]` 直接成为 `cmd26[24:0]`，custom1 则在 precode 阶段按控制逻辑字段重排。`pmodld` 采用 8-bit `MOD_ID`；模表对象通过 `dload type=2, flag[0]=1` 分配到 small Bank 5。
 
 ## 1. 编程模型
 
@@ -49,7 +49,7 @@ HPU 指令均为 32-bit 定长指令，使用两个 RISC-V custom opcode：
 
 ### 1.2 多项式对象槽位
 
-HPU 软件使用 `p0` 到 `p7` 表示 8 个 3-bit 对象槽位。对象槽位不是 RISC-V 通用寄存器，而是 HPU 内部多项式、常量、twiddle 或配置对象的逻辑标识。
+HPU 软件使用 `p0` 到 `p7` 表示 8 个 3-bit 对象槽位。对象槽位不是 RISC-V 通用寄存器或 SRAM bank 编号，而是对象状态表的逻辑标识。每个对象由硬件维护 `ALLOC/V/busy/base/len`；allocator 再将其映射到具体 SRAM bank。
 
 每个 live 对象至少具有以下软件可见属性：
 
@@ -80,7 +80,7 @@ q  = 32-bit modulus
 mu = floor(2^64 / q), supplied to Barrett reduction
 ```
 
-模上下文表通过 `dload type=2` 安装到专用模表区域，`pmodld MOD_ID` 从该表选择当前上下文。执行计算指令前，软件必须先激活与当前 RNS limb 对应的上下文；切换 Q/P 基时必须重新执行 `pmodld`。
+模上下文对象通过 `dload type=2, flag[0]=1` 请求 small-bank 分配，allocator 将其物理 base 放入 `SMALL_BANK_ID=5`。当前 Bank 5 为 8 line，每 line 可放 16 个 128-bit context，因此物理模表最多容纳 128 个上下文。模表 DMA 完成后，`pmodld MOD_ID` 从该表选择当前上下文。执行计算指令前，软件必须先激活与当前 RNS limb 对应的上下文；切换 Q/P 基时必须重新执行 `pmodld`。
 
 ### 1.5 指令顺序和对象生命周期
 
@@ -103,9 +103,11 @@ mu = floor(2^64 / q), supplied to Barrett reduction
 | `p0`..`p7` | 0..7 | HPU 对象槽位 |
 | `x0`..`x31` | 0..31 | custom1 使用的 RISC-V 通用寄存器编号 |
 | `cimm8` | 0..255 | `pmul/pmac` 小立即数 |
-| `stage/idx0/idx1` | 0..15，格式另有说明 | stage 或辅助索引 |
-| `mod_id` | 0..255 | 固定模上下文表编号 |
-| `tag` | 0..31 | 5-bit 同步标签 |
+| `stage` | 0..15 | NTT/INTT stage |
+| `mode` | 0..3 | custom0 2-bit 模式 |
+| `flag` | 0..1 | custom0 1-bit 标志 |
+| `mod_id` | 编码 0..255，当前物理表 0..127 | 模上下文表编号 |
+| `small_bank` | 0..1 | `dload flag[0]`，1 请求 small Bank 5 |
 
 整数支持十进制和 `0x` 前缀十六进制。助记符不区分大小写，但对象和寄存器前缀应写成小写 `p`、`x`。
 
@@ -122,46 +124,75 @@ mu = floor(2^64 / q), supplied to Barrett reduction
 
 项目生成的 `.cpp` 文件是中间表示；当前编码流程由项目自身的 parser/encoder 产生 `.inst32`，不要求系统 GNU assembler 原生认识这些 HPU 助记符。
 
+### 2.3 26-bit precode
+
+控制逻辑命令固定把类别放在最高位：
+
+```text
+cmd26[25]   = cmd_kind: 0=custom0, 1=custom1
+cmd26[24:0] = payload
+```
+
+custom0 的 payload 与原始指令去掉低 7-bit opcode 后完全相同：
+
+```text
+custom0: cmd26 = {1'b0, inst[31:7]}
+```
+
+custom1 的 `rs1/rs2` 用于核侧形成 `mem_line_offset/mem_len_lines` sideband，不进入命令本体。precode 从原始 DMA 指令提取语义字段并重排为：
+
+```text
+cmd26[25]    = 1
+cmd26[24:14] = 0
+cmd26[13:10] = {3'b000, flag[0]}
+cmd26[9:6]   = 0
+cmd26[5:3]   = OBJ_ID
+cmd26[2:1]   = dload: TYPE
+                 dstore: {REL, 1'b0}
+cmd26[0]     = DIR
+```
+
+项目为每个可编码算子同时生成 `.inst32` 和 `.cmd26`。`outputs/rv_interface_smoke/test_data/expected_cmd26.csv` 提供逐条 32→26-bit 对拍数据。
+
 ## 3. 32-bit 指令格式
 
 ### 3.1 AR3 格式
 
 ```text
- 31      28 27    25 24    22 21             14 13       10 9      7 6       0
-+----------+--------+--------+-----------------+-----------+---------+---------+
-|   OPC4   |  PDST  | PSRC1  |      OP2_8      |   MODE4   |  FLAG3  | 0001011 |
-+----------+--------+--------+-----------------+-----------+---------+---------+
+ 31      28 27    25 24    22 21             14 13       10 9    8 7 6       0
++----------+--------+--------+-----------------+-------------+------+--+---------+
+|   OPC4   |  PDST  | PSRC1  |      OP2_8      | STAGE4=0    | MODE2| F| 0001011 |
++----------+--------+--------+-----------------+-------------+------+--+---------+
 ```
 
 编码公式：
 
 ```text
 word = (OPC4 << 28) | (PDST << 25) | (PSRC1 << 22)
-     | (OP2_8 << 14) | (MODE4 << 10) | (FLAG3 << 7) | 0x0B
+     | (OP2_8 << 14) | (MODE2 << 8) | (FLAG1 << 7) | 0x0B
 ```
 
-- 对象模式：`OP2_8[2:0]=PSRC2`，高 5-bit 为 0，`MODE4=0`。
-- 立即数模式：`OP2_8=cimm8`，编码器设置 `MODE4[0]=1`。
-- 文本汇编不直接暴露 `FLAG3`，其值为 0。
+- 对象模式：`OP2_8[2:0]=PSRC2`，高 5-bit 为 0，`MODE2=0`。
+- 立即数模式：`OP2_8=cimm8`，编码器设置 `MODE2[0]=1`。
+- 算术文本语法不直接暴露 `FLAG1`，其值为 0。
 
 ### 3.2 STG 格式
 
 ```text
- 31      28 27    25 24    22 21    18 17    14 13    10 9      7 6       0
-+----------+--------+--------+--------+--------+--------+---------+---------+
-|   OPC4   | PDATA  | PTWID  |  IDX0  |  IDX1  | MODE4  |  FLAG3  | 0001011 |
-+----------+--------+--------+--------+--------+--------+---------+---------+
+ 31      28 27    25 24    22 21             14 13       10 9    8 7 6       0
++----------+--------+--------+-----------------+-------------+------+--+---------+
+|   OPC4   | PDATA  | PTWID  |  reserved=0     |   STAGE4    | MODE2| F| 0001011 |
++----------+--------+--------+-----------------+-------------+------+--+---------+
 ```
 
 编码公式：
 
 ```text
 word = (OPC4 << 28) | (PDATA << 25) | (PTWID << 22)
-     | (IDX0 << 18) | (IDX1 << 14) | (MODE4 << 10)
-     | (FLAG3 << 7) | 0x0B
+     | (STAGE4 << 10) | (MODE2 << 8) | (FLAG1 << 7) | 0x0B
 ```
 
-当前汇编语法把 `IDX0` 用作 `stage`。文本汇编不暴露 `FLAG3`，其值为 0。
+`stage`、`mode` 和 `flag` 均由汇编显式给出；当前生成器使用 `mode=0, flag=0`。
 
 ### 3.3 MOD 格式
 
@@ -178,60 +209,62 @@ word = (OPC4 << 28) | (PDATA << 25) | (PTWID << 22)
 word = (0b0110 << 28) | (MOD_ID8 << 14) | 0x0B
 ```
 
-去掉 RISC-V 低 7-bit opcode 后，`MOD_ID8` 位于 26-bit HPU 命令的 `OP2_8[14:7]`。其余操作数字段必须为 0。
+经过 custom0 precode 后，`MOD_ID8` 位于 `cmd26[14:7]`。其余操作数字段必须为 0。
 
-### 3.4 CFG 格式
+### 3.4 PFREE 格式
 
 ```text
  31      28 27    25 24    22 21                                  7 6       0
 +----------+--------+--------+--------------------------------------+---------+
-|   OPC4   |  IDX0  |  IDX1  |                CFG15                 | 0001011 |
+|   1000   | reserved| OBJ_ID |             reserved=0               | 0001011 |
 +----------+--------+--------+--------------------------------------+---------+
 ```
 
 编码公式：
 
 ```text
-word = (OPC4 << 28) | (IDX0 << 25) | (IDX1 << 22)
-     | (CFG15 << 7) | 0x0B
+word = (0b1000 << 28) | (OBJ_ID << 22) | 0x0B
 ```
 
-`pfree` 复用 CFG 格式，但只接受一个对象操作数；`IDX1` 和 `CFG15` 必须为 0。
+`OBJ_ID` 使用 custom0 的 `PSRC` 位段，其他载荷位必须为 0。
 
 ### 3.5 SYNC 格式
 
 ```text
- 31      28 27       23 22    20 19                              7 6       0
-+----------+-----------+--------+----------------------------------+---------+
-|   0111   |   TAG5    | MODE3  |            reserved=0            | 0001011 |
-+----------+-----------+--------+----------------------------------+---------+
+ 31      28 27                                                       7 6       0
++----------+----------------------------------------------------------+---------+
+|   0111   |                       reserved=0                         | 0001011 |
++----------+----------------------------------------------------------+---------+
 ```
 
 编码公式：
 
 ```text
-word = (0b0111 << 28) | (TAG5 << 23) | (MODE3 << 20) | 0x0B
+word = (0b0111 << 28) | 0x0B
 ```
 
-当前生成器使用 `tag=0, mode=0`。非零值可被编码，但其硬件语义尚未在项目中定义。
+`psync` 不携带 tag/mode，所有载荷位必须为 0。
 
 ### 3.6 DMA 格式
 
 ```text
- 31             25 24    20 19    15 14 13    12 11     9 8   7 6       0
-+-----------------+--------+--------+--+--------+---------+-----+---------+
-|   reserved=0    |  RS2   |  RS1   |D | TYPE2  | OBJ_ID  |  0  | 0101011 |
-+-----------------+--------+--------+--+--------+---------+-----+---------+
+ 31             25 24    20 19    15 14 13    12 11     9 8 7 6       0
++-----------------+--------+--------+--+--------+---------+--+-+---------+
+|   reserved=0    |  RS2   |  RS1   |D | TYPE2  | OBJ_ID  |SB|0| 0101011 |
++-----------------+--------+--------+--+--------+---------+--+-+---------+
 ```
 
 编码公式：
 
 ```text
 word = (RS2 << 20) | (RS1 << 15) | (DIR << 14)
-     | (TYPE2 << 12) | (OBJ_ID << 9) | 0x2B
+     | (TYPE2 << 12) | (OBJ_ID << 9)
+     | (SMALL_BANK << 8) | 0x2B
 ```
 
-当前项目保持上述 custom1 位域。`RS1/RS2` 编码的是寄存器编号，不是寄存器值。
+`SMALL_BANK` 是 dload 的 `flag[0]`；1 表示请求 allocator 将小对象放入 `SMALL_BANK_ID=5`。dstore 中该位必须为 0。`RS1/RS2` 编码的是寄存器编号，不是寄存器值。
+
+原始 custom1 的 `RS1/RS2` 由核侧读取并转换成 `mem_line_offset/mem_len_lines` sideband。precode 只把 `SMALL_BANK/OBJ_ID/TYPE/DIR` 重排到 26-bit 命令，因而 `SMALL_BANK=1` 最终表现为 `cmd26.flag[0]=cmd26[10]=1`。
 
 ## 4. 算术指令
 
@@ -316,13 +349,13 @@ for i = 0 .. L-1:
     P[pdst][i] = P[psrc1][i] * cimm8 mod q
 ```
 
-对象模式设置 `MODE4=0`；立即数模式设置 `MODE4[0]=1`。`cimm8` 范围为 0..255。
+对象模式设置 `MODE2=0`；立即数模式设置 `MODE2[0]=1`。`cimm8` 范围为 0..255。
 
 **示例**
 
 ```asm
 pmul p2, p0, p1       # 0x2400400B
-pmul p2, p0, 255      # 0x243FC40B
+pmul p2, p0, 255      # 0x243FC10B
 ```
 
 ### 4.4 PMAC - 多项式逐点模乘加
@@ -354,7 +387,7 @@ for i = 0 .. L-1:
 
 ```asm
 pmac p2, p0, p1       # 0x3400400B
-pmac p2, p0, 255      # 0x343FC40B
+pmac p2, p0, 255      # 0x343FC10B
 ```
 
 ## 5. 变换指令
@@ -364,13 +397,13 @@ pmac p2, p0, 255      # 0x343FC40B
 **语法**
 
 ```asm
-pntt pdata, ptwiddle, stage, idx1, mode
+pntt pdata, ptwiddle, stage, mode, flag
 ```
 
 **操作**
 
 ```text
-P[pdata] = NTT_STAGE(P[pdata], P[ptwiddle], stage, idx1, mode, q)
+P[pdata] = NTT_STAGE(P[pdata], P[ptwiddle], stage, mode, flag, q)
 ```
 
 当前生成器把 `pdata` 视为同一 logical object id 下的读写对象，每条 `pntt` 只执行一个 stage。完整长度为 `N` 的 NTT 发出 `log2(N)` 条指令，stage 从 0 递增到 `log2(N)-1`。
@@ -379,20 +412,20 @@ P[pdata] = NTT_STAGE(P[pdata], P[ptwiddle], stage, idx1, mode, q)
 | --- | --- | --- |
 | `pdata` | `p0`..`p7` | 数据对象 |
 | `ptwiddle` | `p0`..`p7` | 当前 stage 的 twiddle 对象 |
-| `stage` | 0..15 | 编入 `IDX0` |
-| `idx1` | 0..15 | 当前生成器写 0 |
-| `mode` | 0..15 | 当前生成器写 0 |
+| `stage` | 0..15 | 编入 `STAGE4` |
+| `mode` | 0..3 | 当前生成器写 0 |
+| `flag` | 0..1 | 当前生成器写 0 |
 
 **示例**
 
 ```asm
-pntt p0, p3, 15, 0, 0    # 0x40FC000B
+pntt p0, p3, 15, 0, 0    # 0x40C03C0B
 ```
 
 软件通常在每个 stage 前加载 twiddle，并在该 stage 后释放：
 
 ```asm
-dload x12, x13, p3, 1
+dload x12, x13, p3, 1, 0
 pntt  p0, p3, 0, 0, 0
 pfree p3
 ```
@@ -402,21 +435,31 @@ pfree p3
 **语法**
 
 ```asm
-pintt pdata, ptwiddle, stage, idx1, mode
+pintt pdata, ptwiddle, stage, mode, flag
 ```
 
 **操作**
 
 ```text
-P[pdata] = INTT_STAGE(P[pdata], P[ptwiddle], stage, idx1, mode, q)
+P[pdata] = INTT_STAGE(P[pdata], P[ptwiddle], stage, mode, flag, q)
 ```
 
-操作数范围和生命周期与 `pntt` 相同。完整 INTT 需要发出 `log2(N)` 个 stage；归一化、逆 twist 和物理数据排列必须与提供给硬件的 twiddle ABI 一致。
+操作数范围和生命周期与 `pntt` 相同。当前汇编生成器按 `stage=0..log2(N)-1` 的顺序执行 INTT；`pdata` 的逻辑对象号在所有 stage 之间保持不变，控制器可在完成事件后提交新的物理 base。每个 stage 依次生成 `dload`、`pintt` 和 `pfree`，其中 `ptwiddle` 在当前 stage 使用后立即释放：
+
+```asm
+dload ..., ptwiddle, 1, 0
+pintt pdata, ptwiddle, stage, 0, 0
+pfree ptwiddle
+```
+
+软件 reference 的数学行为是：先对输入执行 bit reversal，再执行 radix-2 DIT 逆循环 NTT，随后逐系数乘 `N^-1 mod q` 完成归一化，最后逐系数乘 `psi^-i mod q` 完成负循环逆 twist。硬件数据包为每个 RNS 模数生成逐 stage 的逆 DIT twiddle，并额外生成 `post_untwist_scale.u32.bin`；其中第 `i` 项为 `N^-1 * psi^-i mod q`。逐 stage twiddle 和 post factor 均使用 little-endian `uint32` canonical residue，每个镜像从新的 256B HPU line 开始，尾部补零。
+
+当前指令流没有单独发出 bit reversal、归一化或逆 twist 指令，且生成的 `dload x0, x0, ...` 地址仍是占位值。`abi.json` 当前约定 bit reversal 由 HPU 在 stage 0 前的内部 shuffle 完成；runtime 还需按照 `twiddle_map.csv` 将每个 stage 的 `dload` 绑定到对应 twiddle line，并由硬件在最后 stage 融合 `post_untwist_scale`，或在后续流程中显式完成同等的逐系数乘法。
 
 **示例**
 
 ```asm
-pintt p0, p3, 15, 0, 0   # 0x50FC000B
+pintt p0, p3, 15, 0, 0   # 0x50C03C0B
 ```
 
 ## 6. 配置与生命周期指令
@@ -439,11 +482,11 @@ active_mod_context = MOD_TABLE[line][slot]
 
 | 操作数 | 范围 | 含义 |
 | --- | --- | --- |
-| `mod_id` | 0..255 | Bank 5 固定模上下文表中的 8-bit 表项编号 |
+| `mod_id` | 编码 0..255，当前配置 0..127 | Bank 5 模上下文表中的 8-bit 表项编号 |
 
-一条 256B HPU line 可容纳 16 个 128-bit 模上下文，因此 `mod_id[7:4]` 选择相对 line，`mod_id[3:0]` 选择 line 内 slot。`pmodld` 不读取普通对象槽位，也不产生多项式结果；它改变后续模运算使用的 q/Barrett mu，因此必须位于对应计算指令之前。
+一条 256B HPU line 可容纳 16 个 128-bit 模上下文，因此 `mod_id[7:4]` 选择相对 line，`mod_id[3:0]` 选择 line 内 slot。编码域允许 256 个编号，但当前 `SMALL_BANK_LINES=8`，所以生成器只允许 128 个物理 context。`pmodld` 不携带对象号，也不产生多项式结果；它改变后续模运算使用的 q/Barrett mu。
 
-模表的数据搬入与上下文选择是两个独立步骤：`dload type=2` 负责安装模表数据，`pmodld` 只携带 `MOD_ID`。当前 custom1 仍使用对象号作为 DMA 传输句柄，但该对象号不会编码进 `pmodld`。
+模表的数据搬入与上下文选择是两个独立步骤。`dload type=2, flag[0]=1` 为模表逻辑对象建立 `ALLOC/V/busy/base/len` 状态，并请求 allocator 将物理 base 放到 Bank 5；随后的 `psync` 等待 DMA 完成。`pmodld` 只携带 `MOD_ID`，通过 cfg 读口访问模表并更新活动 q/mu。
 
 **示例**
 
@@ -470,12 +513,12 @@ require OBJ[psrc] is allocated and not busy
 release OBJ[psrc]
 ```
 
-`pfree` 使用 CFG 格式，目标对象编码在 `IDX0`，`IDX1=0`、`CFG15=0`。它必须排在对象最后一次读取之后。
+`pfree` 的目标对象编码在 custom0 `PSRC/OBJ_ID` 位段，其他载荷位为 0。它必须排在对象最后一次读取之后。
 
 **示例**
 
 ```asm
-pfree p4              # 0x8800000B
+pfree p4              # 0x8100000B
 ```
 
 对已经使用 `dstore rel=1` 释放的对象再次执行 `pfree` 属于非法生命周期操作。
@@ -485,28 +528,22 @@ pfree p4              # 0x8800000B
 **语法**
 
 ```asm
-psync tag, mode
+psync
 ```
 
 **当前软件语义**
 
 ```text
-wait_until_preceding_hpu_work_reaches_sync_boundary(tag, mode)
+wait_until(inflight_count == 0)
 notify_software()
 ```
 
-| 操作数 | 范围 | 建议值 |
-| --- | --- | --- |
-| `tag` | 0..31 | 0 |
-| `mode` | 0..7 | 0 |
-
-当前项目只依赖 `psync 0, 0` 的通用阶段屏障语义。非零 tag/mode 能被编码并用于 RV 字段测试，但尚无稳定的软件含义。`psync` 是否覆盖所有 custom1 DMA 完成事件仍需按目标 RTL 版本确认。
+`psync` 没有操作数。按照当前控制逻辑，它在队首等待统一 `inflight_cnt=0`，其中完成事件包括 `extmem_done_pulse`、`exec_done` 和 `cfg_done`。因此生成器在模表 dload 与首条 `pmodld` 之间发出 `psync`。
 
 **示例**
 
 ```asm
-psync 0, 0            # 0x7000000B
-psync 31, 7           # 0x7FF0000B
+psync                  # 0x7000000B
 ```
 
 ## 7. 外部访存指令
@@ -516,13 +553,13 @@ psync 31, 7           # 0x7FF0000B
 **语法**
 
 ```asm
-dload rs1, rs2, pdst, load_type
+dload rs1, rs2, pdst, load_type, small_bank
 ```
 
 **操作**
 
 ```text
-enqueue_load(GPR[rs1], GPR[rs2], pdst, load_type)
+enqueue_load(GPR[rs1], GPR[rs2], pdst, load_type, small_bank)
 on completion:
     OBJ[pdst] becomes valid
 ```
@@ -534,12 +571,15 @@ on completion:
 | 2 | `mod_ctx` | 模上下文集合 |
 | 3 | `shuffle_cfg` | shuffle 配置；编码保留，旧 `pshuf` 指令已删除 |
 
+`small_bank=0` 使用普通 bank 分配；`small_bank=1` 设置 `flag[0]`，请求把长度不超过 8 line 的小对象分配到 Bank 5。模上下文生成器固定使用 `type=2, small_bank=1`。
+
 `rs1` 和 `rs2` 是 5-bit RISC-V 寄存器编号。当前项目期望 runtime 将 HPU_MEM line offset/count 或目标平台定义的 DMA 参数放入对应寄存器；生成的完整算子流仍大量使用 `x0,x0` 占位，因此这些 `.inst32` 目前只表达计算顺序，不能直接作为有效 DMA 请求执行。
 
 **示例**
 
 ```asm
-dload x10, x11, p0, 0     # 0x00B5002B
+dload x10, x11, p0, 0, 0  # 0x00B5002B
+dload x10, x11, p4, 2, 1  # 0x00B5292B
 ```
 
 ### 7.2 DSTORE - 外部存储器写回
@@ -579,16 +619,17 @@ dstore x10, x11, p2, 1    # 0x00B5542B
 以下序列展示一个 RNS limb 上的多项式逐点乘。寄存器中的实际 offset/count 由 runtime 准备：
 
 ```asm
-dload  x10, x11, p4, 2     # install mod table; p4 is the DMA transfer handle
+dload  x10, x11, p4, 2, 1  # allocate the mod-table object in small Bank 5
+psync                       # wait until the mod-table DMA is complete
 pmodld 0                   # activate q0 by MOD_ID
-dload  x12, x13, p0, 1     # left polynomial
-dload  x14, x15, p1, 1     # right polynomial
+dload  x12, x13, p0, 1, 0  # left polynomial
+dload  x14, x15, p1, 1, 0  # right polynomial
 pmul   p2, p0, p1
 pfree  p0
 pfree  p1
 dstore x16, x17, p2, 1
 pfree  p4
-psync  0, 0
+psync
 ```
 
 ### 8.2 乘加累积
@@ -605,19 +646,19 @@ pmac p2, p6, 7             # p2 += p6 * 7
 
 ```asm
 # q already selected with pmodld
-dload x10, x11, p0, 1      # polynomial
+dload x10, x11, p0, 1, 0   # polynomial
 
-dload x12, x13, p3, 1      # stage 0 twiddle
+dload x12, x13, p3, 1, 0   # stage 0 twiddle
 pntt  p0, p3, 0, 0, 0
 pfree p3
 
 # repeat for stage 1 .. 11
-dload x14, x15, p3, 1
+dload x14, x15, p3, 1, 0
 pntt  p0, p3, 11, 0, 0
 pfree p3
 
 dstore x16, x17, p0, 1
-psync 0, 0
+psync
 ```
 
 ### 8.4 RNS 循环
@@ -641,7 +682,7 @@ for each modulus context i:
 - 助记符是否属于 11 条当前指令。
 - 操作数数量是否正确。
 - `p` 对象和 `x` 寄存器是否越界。
-- stage、idx、mode、tag、cfg、立即数和 type/rel 是否在编码范围内。
+- stage、mode、flag、立即数、type/rel 和 small-bank hint 是否在编码范围内。
 - 只有 `pmul/pmac` 可以使用整数第三操作数。
 - `pfree` 只能有一个对象操作数。
 - `dstore rel` 只能为 0 或 1。
@@ -665,39 +706,39 @@ ctest --test-dir build --output-on-failure
 | `outputs/<case>/<case>.asm` | HPU 汇编指令流 |
 | `outputs/<case>/<case>.cpp` | C++ 内联汇编形式 |
 | `outputs/<case>/<case>.inst32` | 每行一个 32-bit 二进制字符串 |
+| `outputs/<case>/<case>.cmd26` | 每行一个控制逻辑 26-bit 二进制命令 |
 | `outputs/rv_interface_smoke/test_data/expected_decode.csv` | 指令字、路由和规范化汇编 |
 | `outputs/<case>/test_data/hardware/` | `uint32` HPU 数据镜像和 line map |
 
-`.inst32` 是文本形式的 32 个 `0/1` 字符，不是可直接按字节加载的 little-endian ELF 或 binary。接入硬件测试平台时应明确其文本解析或另行打包为目标字节序。
+`.inst32`/`.cmd26` 分别是每行 32/26 个 `0/1` 字符的文本，不是可直接按字节加载的 little-endian ELF 或 binary。接入硬件测试平台时应明确其文本解析或另行打包为目标字节序。
 
 ## 附录 A：指令编码速查
 
-| 指令示例 | 32-bit 机器码 |
-| --- | --- |
-| `padd p2, p0, p1` | `0x0400400B` |
-| `psub p2, p0, p1` | `0x1400400B` |
-| `pmul p2, p0, p1` | `0x2400400B` |
-| `pmul p2, p0, 255` | `0x243FC40B` |
-| `pmac p2, p0, p1` | `0x3400400B` |
-| `pmac p2, p0, 255` | `0x343FC40B` |
-| `pntt p0, p3, 15, 0, 0` | `0x40FC000B` |
-| `pintt p0, p3, 15, 0, 0` | `0x50FC000B` |
-| `pmodld 0` | `0x6000000B` |
-| `pmodld 255` | `0x603FC00B` |
-| `psync 0, 0` | `0x7000000B` |
-| `pfree p4` | `0x8800000B` |
-| `dload x10, x11, p0, 0` | `0x00B5002B` |
-| `dstore x10, x11, p2, 1` | `0x00B5542B` |
+| 指令示例 | 32-bit 机器码 | 26-bit 控制命令 |
+| --- | --- | --- |
+| `padd p2, p0, p1` | `0x0400400B` | `0x0080080` |
+| `psub p2, p0, p1` | `0x1400400B` | `0x0280080` |
+| `pmul p2, p0, p1` | `0x2400400B` | `0x0480080` |
+| `pmul p2, p0, 255` | `0x243FC10B` | `0x0487F82` |
+| `pmac p2, p0, p1` | `0x3400400B` | `0x0680080` |
+| `pmac p2, p0, 255` | `0x343FC10B` | `0x0687F82` |
+| `pntt p0, p3, 15, 0, 0` | `0x40C03C0B` | `0x0818078` |
+| `pintt p0, p3, 15, 0, 0` | `0x50C03C0B` | `0x0A18078` |
+| `pmodld 0` | `0x6000000B` | `0x0C00000` |
+| `pmodld 255` | `0x603FC00B` | `0x0C07F80` |
+| `psync` | `0x7000000B` | `0x0E00000` |
+| `pfree p4` | `0x8100000B` | `0x1020000` |
+| `dload x10, x11, p0, 0, 0` | `0x00B5002B` | `0x2000000` |
+| `dload x10, x11, p4, 2, 1` | `0x00B5292B` | `0x2000424` |
+| `dstore x10, x11, p2, 1` | `0x00B5542B` | `0x2000015` |
 
 ## 附录 B：当前实现边界
 
 以下内容不由当前编码器单独保证：
 
-1. 32-bit 指令到 HPU 26-bit 内部命令的最终 precode 映射。
-2. custom1 如何将 `dload type=2` 的模表镜像绑定到 Bank 5 固定表区域。
-3. custom1 中 `rs1/rs2` 的最终 line sideband 或 DTLB descriptor 语义。
-4. `psync` 是否包含所有 DMA 完成事件。
-5. NTT/INTT 的最终物理 in-place/out-of-place 和 twiddle lane 布局。
-6. CSR、cache maintenance、中断和 fault 的 runtime 实现。
+1. custom1 中 `rs1/rs2` 的最终 line sideband 或 DTLB descriptor 语义。
+2. `mod_table_base_line` 如何绑定到 small-bank 模表对象的实际 `base`。
+3. NTT/INTT 的 twiddle lane 布局及各 stage 物理 base 提交细节。
+4. CSR、cache maintenance、中断和 fault 的 runtime 实现。
 
 在上述接口冻结前，本手册可作为当前软件编码器和指令生成器的规范，但不能代替 SoC/RTL 接口控制文档。

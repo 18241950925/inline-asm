@@ -44,8 +44,10 @@ std::string generate_hpu_auto_body_asm(
     const int SLOT_B = 1;       // 通用工作槽 B
     const int SLOT_C = 2;       // 累加器 / 输出槽
 	const int TWIDDLE = 3;      
-    const int POBJ_MOD_CTX = 4; // 固定模表的 custom1 DMA 传输句柄
-	asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+    const int POBJ_MOD_CTX = 4; // small-bank 模表对象
+	asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
 
     asm_code << "        /* ========================================================== */\n";
     asm_code << "        /* --- Step 0: Manual Automorphism on c0 (NTT -> iNTT_auto)   */\n";
@@ -73,7 +75,9 @@ std::string generate_hpu_auto_body_asm(
         asm_code << "        /* --- Step 1: ModUp on ct1 --- */\n";
         // ModUp 会将数据从 HBM 读出，拉伸后写回 HBM 的 "x_ct1_up"
         asm_code << generate_hpu_modup_body_asm(digit_size, num_p, q_offset, false);
-        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                               hpu::DloadFlag::small_bank);
+        asm_code << hpu::psync();
 
         asm_code << "        /* --- Step 2: Fused NTT Auto on Q and P bases --- */\n";
         for (int i = 0; i < total_bases; ++i) {
@@ -112,7 +116,9 @@ std::string generate_hpu_auto_body_asm(
     }
 
     asm_code << "\n        /* --- Step 4: INTT on the keyed outputs --- */\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     for (int v = 0; v < 2; ++v) {
         for (int i = 0; i < total_bases; ++i) {
             asm_code << hpu::pmodld(mod_ctx_index(i));
@@ -132,7 +138,9 @@ std::string generate_hpu_auto_body_asm(
     }
 
     asm_code << "\n        /* --- Step 6: Final Merge (c0 + out0) --- */\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     for (int i = 0; i < num_q; ++i) {
         asm_code << hpu::pmodld(mod_ctx_index_q(i));
         // SLOT_A 读取 Step 5 降模后的 out0
@@ -150,7 +158,7 @@ std::string generate_hpu_auto_body_asm(
     }
     asm_code << hpu::pfree(POBJ_MOD_CTX);
 
-    if (append_psync) asm_code << hpu::psync(0);
+    if (append_psync) asm_code << hpu::psync();
 
     return asm_code.str();
 }
@@ -169,7 +177,7 @@ std::string generate_hpu_auto_asm(
 
 		if (num_q <= 0 || num_p <= 0 || !is_power_of_two(N) || dnum <= 0
 			|| num_q + num_p > hpu::kMaxModContexts) {
-			asm_code << "    // Invalid config: require valid N/digits and at most 256 MOD_IDs\n";
+			asm_code << "    // Invalid config: require valid N/digits and at most 128 mod contexts\n";
 		asm_code << "}\n";
 		return asm_code.str();
 	}

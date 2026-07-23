@@ -204,9 +204,9 @@ Instruction parse_stg(Mnemonic mnemonic, const std::vector<std::string>& operand
     instruction.mnemonic = mnemonic;
     instruction.pdst = parse_pobj(operands[0], "pdata");
     instruction.psrc1 = parse_pobj(operands[1], "ptwiddle");
-    instruction.idx0 = parse_base0_int(operands[2], "idx0");
-    instruction.idx1 = parse_base0_int(operands[3], "idx1");
-    instruction.mode = static_cast<std::uint8_t>(parse_base0_int(operands[4], "mode"));
+    instruction.idx0 = parse_base0_int(operands[2], "stage");
+    instruction.mode = static_cast<std::uint8_t>(parse_base0_int(operands[3], "mode"));
+    instruction.flag = static_cast<std::uint8_t>(parse_base0_int(operands[4], "flag"));
     return instruction;
 }
 
@@ -231,24 +231,30 @@ Instruction parse_cfg(Mnemonic mnemonic, const std::vector<std::string>& operand
 }
 
 Instruction parse_sync(const std::vector<std::string>& operands) {
-    expect_operand_count(operands, 2, "psync");
+    expect_operand_count(operands, 0, "psync");
 
     Instruction instruction {};
     instruction.mnemonic = Mnemonic::kPsync;
-    instruction.tag = static_cast<std::uint8_t>(parse_base0_int(operands[0], "tag"));
-    instruction.mode = static_cast<std::uint8_t>(parse_base0_int(operands[1], "mode"));
     return instruction;
 }
 
 Instruction parse_dma(Mnemonic mnemonic, const std::vector<std::string>& operands) {
-    expect_operand_count(operands, 4, to_string(mnemonic));
+    expect_operand_count(operands, mnemonic == Mnemonic::kDload ? 5 : 4,
+                         to_string(mnemonic));
 
     Instruction instruction {};
     instruction.mnemonic = mnemonic;
     instruction.rs1 = parse_xreg(operands[0], "rs1");
     instruction.rs2 = parse_xreg(operands[1], "rs2");
     instruction.obj_id = static_cast<std::uint8_t>(parse_pobj(operands[2], "obj_id"));
-    instruction.type = static_cast<std::uint8_t>(parse_base0_int(operands[3], mnemonic == Mnemonic::kDload ? "load_type" : "rel"));
+    instruction.type = static_cast<std::uint8_t>(
+        parse_base0_int(
+            operands[3],
+            mnemonic == Mnemonic::kDload ? "load_type" : "rel"));
+    if (mnemonic == Mnemonic::kDload) {
+        instruction.dma_flag =
+            static_cast<std::uint8_t>(parse_base0_int(operands[4], "small_bank"));
+    }
     return instruction;
 }
 

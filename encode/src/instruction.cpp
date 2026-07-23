@@ -83,8 +83,8 @@ std::string to_string(const Instruction& instruction) {
             oss << ' ' << format_pobj(instruction.pdst)
                 << ", " << format_pobj(instruction.psrc1)
                 << ", " << instruction.idx0
-                << ", " << instruction.idx1
-                << ", " << static_cast<int>(instruction.mode);
+                << ", " << static_cast<int>(instruction.mode)
+                << ", " << static_cast<int>(instruction.flag);
             break;
 
         case Format::kMOD:
@@ -96,8 +96,6 @@ std::string to_string(const Instruction& instruction) {
             break;
 
         case Format::kSYNC:
-            oss << ' ' << static_cast<int>(instruction.tag)
-                << ", " << static_cast<int>(instruction.mode);
             break;
 
         case Format::kDMA:
@@ -105,6 +103,9 @@ std::string to_string(const Instruction& instruction) {
                 << ", " << format_xreg(instruction.rs2)
                 << ", " << format_pobj(instruction.obj_id)
                 << ", " << static_cast<int>(instruction.type);
+            if (instruction.mnemonic == Mnemonic::kDload) {
+                oss << ", " << static_cast<int>(instruction.dma_flag);
+            }
             break;
     }
 

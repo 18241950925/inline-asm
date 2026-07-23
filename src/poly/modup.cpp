@@ -63,7 +63,7 @@ std::string generate_hpu_hybrid_modup_body_asm(
         false);
 
     if (append_psync) {
-        asm_code << hpu::psync(0);
+        asm_code << hpu::psync();
     }
     return asm_code.str();
 }
@@ -79,7 +79,7 @@ std::string generate_hpu_modup_asm(
 
     if (num_q_digit <= 0 || num_p <= 0 || q_offset < 0
         || q_offset + num_q_digit + num_p > hpu::kMaxModContexts) {
-        asm_code << "    // Invalid config: require positive bases within 8-bit MOD_ID space\n";
+        asm_code << "    // Invalid config: require positive bases within the 128-context Bank 5 capacity\n";
         asm_code << "}\n";
         return asm_code.str();
     }

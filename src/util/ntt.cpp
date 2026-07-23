@@ -33,7 +33,7 @@ std::string generate_hpu_ntt_body_asm(
 
     asm_code << "        // dload all mod contexts (placeholder)\n";
     // 假设调用方已经加载过密文模数
-    // 新版 NTT：原地操作，obj_poly 为数据对象，twiddle_obj 为 twiddle 对象
+    // obj_poly 是稳定的逻辑对象；控制器可为每个 stage 重分配物理 base。
     // 软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
     for (int stage = 0; stage < logN; ++stage) {
         asm_code << "\n        // ==========================================\n";
@@ -45,7 +45,7 @@ std::string generate_hpu_ntt_body_asm(
     }
 
     if (append_psync) {
-        asm_code << hpu::psync(0);
+        asm_code << hpu::psync();
     }
 
     asm_code << "\n        // Final result object slot: " << hpu::pobj(data_obj) << "\n";
@@ -72,7 +72,7 @@ std::string generate_hpu_intt_body_asm(
     asm_code << "        // dload all mod contexts (placeholder)\n";
     // 假设调用方已经加载过密文模数
 
-    // 新版 INTT：原地操作，obj_poly 为数据对象，twiddle_obj 为 twiddle 对象
+    // obj_poly 是稳定的逻辑对象；控制器可为每个 stage 重分配物理 base。
     // 软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
     for (int stage = 0; stage < logN; ++stage) {
         asm_code << "\n        // ==========================================\n";
@@ -84,7 +84,7 @@ std::string generate_hpu_intt_body_asm(
     }
 
     if (append_psync) {
-        asm_code << hpu::psync(0);
+        asm_code << hpu::psync();
     }
 
     asm_code << "\n        // Final result object slot: " << hpu::pobj(data_obj) << "\n";
@@ -109,7 +109,9 @@ std::string generate_hpu_ntt_asm(
     }
 
     asm_code << "    __asm__ volatile(\n";
-    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     asm_code << hpu::pmodld(0);
     asm_code << generate_hpu_ntt_body_asm(
         N,
@@ -118,7 +120,7 @@ std::string generate_hpu_ntt_asm(
         false);
     asm_code << hpu::pfree(mod_ctx_obj);
     if (append_psync) {
-        asm_code << hpu::psync(0);
+        asm_code << hpu::psync();
     }
     asm_code << "\n        // 结束\n";
     asm_code << "        : \n";
@@ -148,7 +150,9 @@ std::string generate_hpu_intt_asm(
     }
 
     asm_code << "    __asm__ volatile(\n";
-    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     asm_code << hpu::pmodld(0);
     asm_code << generate_hpu_intt_body_asm(
         N,
@@ -157,7 +161,7 @@ std::string generate_hpu_intt_asm(
         false);
     asm_code << hpu::pfree(mod_ctx_obj);
     if (append_psync) {
-        asm_code << hpu::psync(0);
+        asm_code << hpu::psync();
     }
     asm_code << "\n        // 结束\n";
     asm_code << "        : \n";

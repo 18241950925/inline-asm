@@ -15,7 +15,7 @@ std::string generate_hpu_moddown_body_asm(
     std::ostringstream asm_code;
 
     if (num_q <= 0 || num_p <= 0 || num_q + num_p > hpu::kMaxModContexts) {
-        asm_code << "        // Invalid config: require positive bases within 8-bit MOD_ID space\n";
+        asm_code << "        // Invalid config: require positive bases within the 128-context Bank 5 capacity\n";
         return asm_code.str();
     }
 
@@ -41,7 +41,9 @@ std::string generate_hpu_moddown_body_asm(
         false);
 
     asm_code << "        // dload all mod contexts (placeholder)\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
 
     asm_code << "        /* MODDOWN stage-2: q <- q - correction (mod q_i) */\n";
     for (int i = 0; i < num_q; ++i) {
@@ -62,7 +64,7 @@ std::string generate_hpu_moddown_body_asm(
     asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     if (append_psync) {
-        asm_code << hpu::psync(0);
+        asm_code << hpu::psync();
     }
 
     return asm_code.str();
@@ -77,7 +79,7 @@ std::string generate_hpu_moddown_asm(
     asm_code << "void hpu_moddown_Q" << num_q << "_P" << num_p << "(void) {\n";
 
     if (num_q <= 0 || num_p <= 0 || num_q + num_p > hpu::kMaxModContexts) {
-        asm_code << "    // Invalid config: require positive bases within 8-bit MOD_ID space\n";
+        asm_code << "    // Invalid config: require positive bases within the 128-context Bank 5 capacity\n";
         asm_code << "}\n";
         return asm_code.str();
     }

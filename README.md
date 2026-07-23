@@ -31,8 +31,8 @@
 - **`hpu_encode`**：由 `encode/CMakeLists.txt` 生成的静态库，供后续测试或上层流程复用。
 
 ### 5) 编码测试辅助模块 (`test/encode`)
-用于把主生成流程输出的 ASM 继续转换为 `.inst32` 文件：
-- **`test/encode/main.cpp`**：读取主流程生成的 `output/<case>.cpp` 与 `output/<case>.asm`，归档到 `outputs/<case>/`，再调用 `hpu_encode` 生成对应的 32 位二进制文本。
+用于把主生成流程输出的 ASM 继续转换为 `.inst32` 和 `.cmd26` 文件：
+- **`test/encode/main.cpp`**：读取主流程生成的 `output/<case>.cpp` 与 `output/<case>.asm`，归档到 `outputs/<case>/`，再调用 `hpu_encode` 生成 32-bit 指令和 26-bit precode 文本。
 - **`inline_asm_encode_outputs`**：构建后生成的测试编码工具。
 
 ### 6) 软件 Reference (`test/reference`)
@@ -50,7 +50,7 @@
 | 可执行文件 | 源入口 | 职责 | 主要输出 |
 | --- | --- | --- | --- |
 | `inline_asm_codegen` | `src/main.cpp` | 调用各级 codegen，生成 HPU C++ 内联汇编和 ASM body | `output/*.cpp`、`output/*.asm` |
-| `inline_asm_encode_outputs` | `test/encode/main.cpp` | 归档生成结果、编码 `.inst32`、生成 RV 接口冒烟流 | `outputs/<case>/*`、`outputs/rv_interface_smoke/*` |
+| `inline_asm_encode_outputs` | `test/encode/main.cpp` | 归档生成结果、编码 `.inst32/.cmd26`、生成 RV 接口冒烟流 | `outputs/<case>/*`、`outputs/rv_interface_smoke/*` |
 | `hpu_reference_vectors` | `test/reference/main.cpp` | 计算软件 golden、解密校验并拆分 UT/IT 数据包 | `outputs/<case>/test_data/*` |
 
 `src/main.cpp` 仍是指令生成主入口。`test/reference/main.cpp` 是另一独立可执行文件的入口，两者没有替代关系。顶层 `hpu_delivery` 目标只是按上述顺序编排三个程序并运行交付检查。
@@ -117,6 +117,7 @@ ctest --test-dir build --output-on-failure
 - `ntt.cpp`
 - `ntt.asm`
 - `ntt.inst32`（运行编码工具后生成）
+- `ntt.cmd26`（与 `.inst32` 逐条对应）
 - `test_data/input.bin`、`test_data/input.hex.txt`
 - `test_data/expected.bin`、`test_data/expected.hex.txt`
 - `test_data/params.json`、`test_data/artifact_manifest.csv`
@@ -130,7 +131,7 @@ ctest --test-dir build --output-on-failure
 当前完整流程由三个阶段组成：
 
 1. `inline_asm_codegen` 从 `src/main.cpp` 进入，向 `output/` 生成 `.cpp` 与 `.asm`。
-2. `inline_asm_encode_outputs` 从 `test/encode/main.cpp` 进入，归档结果并把可编码 ASM 转成 `.inst32`。
+2. `inline_asm_encode_outputs` 从 `test/encode/main.cpp` 进入，归档结果并把可编码 ASM 转成 `.inst32/.cmd26`。
 3. `hpu_reference_vectors` 从 `test/reference/main.cpp` 进入，计算并验证 test data，然后写入 `outputs/<case>/test_data/`。
 
 当前参数尚未收敛到单一配置文件：
@@ -139,15 +140,15 @@ ctest --test-dir build --output-on-failure
 - Reference 参数位于 `test/reference/main.cpp` 的 `kN`、`kNumQ`、`kNumP`、`kDnum`、`kPlainModulus` 和 `kSeed`。
 - `outputs/*/test_data/params.json` 是生成结果，不是输入配置；直接修改后会在下一次生成时被覆盖。
 
-修改 `N/Q/P/dnum` 时必须同步修改两处源配置，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 256`、所有 Q/P 模数可用 `uint32` 表示等约束。当前统一示例为 `N=4096, Q=4, P=3, dnum=2`。模上下文使用 8-bit `MOD_ID`，与 8 个并发对象槽位是两个独立资源。
+修改 `N/Q/P/dnum` 时必须同步修改两处源配置，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 128`、所有 Q/P 模数可用 `uint32` 表示等约束。当前统一示例为 `N=4096, Q=4, P=3, dnum=2`。`MOD_ID` 编码宽度为 8-bit，但当前 small Bank 5 只有 8 line、每 line 16 个 context，因此物理上限为 128；它与 8 个并发对象槽位是两个独立资源。
 
 `hpu_delivery` 会为 `ciphertext_multiply` 自动生成与主配置一致的 `N=4096, Q=4, P=3, dnum=2` 输入、评估密钥、阶段 golden、最终输出、明文校验和 artifact checksum。它同时生成独立的 `uint32` HPU_MEM 镜像、q/Barrett 上下文、逐 stage twiddle、256B line offset/count，并从同一 reference 拆分出 NTT、INTT、MM、BConv、ModUp、PMULT、CMULT、ModDown 和 KeySwitch 的独立 UT 数据包。`auto/test_data/STATUS.md` 记录该算子当前的寄存器分配阻塞项。
 
 
 ## 4. 关键设计实现说明
 
-- **基于 HPU 对象槽的内存映射与原地 NTT/INTT：**
-  底层不再关注向量的大块切片 `l`。针对 `stage=0~log2(N)-1` 的蝶形运算，`pntt/pintt` 以**第一个对象槽位作为数据对象**进行原地变换，**第二个对象槽位作为 twiddle 对象**。调用方只需确保每个 stage 前装载对应 twiddle。
+- **基于 HPU 对象槽的 NTT/INTT：**
+  底层不再关注向量的大块切片 `l`。针对 `stage=0~log2(N)-1` 的蝶形运算，`pntt/pintt` 以**第一个对象槽位作为稳定的逻辑数据对象**，**第二个对象槽位作为 twiddle 对象**。控制器可以在 stage 完成时为数据对象提交新的物理 base；调用方只需保持逻辑对象号并在每个 stage 前装载对应 twiddle。
   
 - **切片感知的模提升运算：**
   为了支持分解字（Digit Decomposition），`modup` / `bconv` 在接口中新加入了 `q_offset` 参数与处理宽度 `num_q_digit`。使得在 `dnum > 1` 的外层循环下，基扩展算字能智能地识别应该处理当前分解下哪一部分素数环境与基偏移。
@@ -162,7 +163,7 @@ ctest --test-dir build --output-on-failure
   `inline-asm` 仍负责汇编生成，`encode` 模块则负责解析、归一化和 32 位编码。两者保留独立边界，但通过同一 CMake 工程统一构建，从而降低汇编语义更新后生成器与编码器失配的风险。
 
 - **11 条指令与对象生命周期：**
-  当前体系结构指令固定为 `padd/psub/pmul/pmac/pntt/pintt/pmodld/pfree/psync/dload/dstore`。旧的 `pshcfg/pshuf/pseed/psample` 已从枚举和编码表移除。临时输入、twiddle 和模表 DMA 传输句柄会在最后一次使用后生成 `pfree`；以 `dstore rel=1` 导出的结果由 DMA 完成后释放，不再重复 `pfree`。
+  当前体系结构指令固定为 `padd/psub/pmul/pmac/pntt/pintt/pmodld/pfree/psync/dload/dstore`。旧的 `pshcfg/pshuf/pseed/psample` 已从枚举和编码表移除。临时输入、twiddle 和 small-bank 模表对象会在最后一次使用后生成 `pfree`；以 `dstore rel=1` 导出的结果由 DMA 完成后释放，不再重复 `pfree`。
 
 - **双输入形式兼容：**
   编码器既可处理纯 ASM body，也可处理带有 `__asm__ volatile(...)` 包装的 C++ 内联汇编文本。对于 `void hpu_xxx(void) {`、`: "memory"`、`);` 等生成边界，解析器会做定向忽略；但非法汇编指令本身仍会被保留为错误。
@@ -177,10 +178,11 @@ ctest --test-dir build --output-on-failure
 - `N` 为 2 的幂（NTT需要传入以确定 Stage 层数）
 - 仅允许 3 个工作槽位：`p0/p1/p2`
 - 复杂算子（PMULT/CMULT/MODUP/MODDOWN）使用 `dload/dstore` 流式搬运，不在本地长期保留多基对象
-- `dload type=2` 已把模表安装到专用区域，随后使用 `pmodld MOD_ID` 激活表项；custom1 对象号只作为传输句柄
+- `dload type=2, flag[0]=1` 将模表逻辑对象分配到 small Bank 5，随后通过 `psync` 等待 DMA 完成，再使用 `pmodld MOD_ID` 激活表项
+- 每个可编码算子同时生成 `.inst32` 和 `.cmd26`；`cmd26[25]` 区分 custom0/custom1，custom0 直接携带 `inst[31:7]`，custom1 按控制逻辑字段重排并另带 offset/count sideband
 - 需要阶段收敛时使用 `psync`
 - 当前 `.inst32` 输出仅覆盖可直接完成寄存器解析的 ASM；`auto` 仍含 `x_c0`、`x_offset`、`x_out` 等符号寄存器占位符，需在完成物理寄存器分配后再编码
-- `cmult` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32` 生成链路；其中 `ciphertext_multiply` 要求 `num_q % dnum == 0` 且 `num_q + num_p <= 256`
+- `cmult` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32/.cmd26` 生成链路；其中 `ciphertext_multiply` 要求 `num_q % dnum == 0` 且 `num_q + num_p <= 128`
 - `ciphertext_multiply/test_data` 已由软件 reference 自动生成；二进制格式、shape 和校验值见其中的 `params.json` 与 `artifact_manifest.csv`
 - 顶层 `.bin` 是 `uint64` 数学 golden；真正面向 HPU 加载的是 `test_data/hardware/` 下按 256B line 补齐的 `.u32.bin`
 - `hardware/line_map.csv` 给出每个对象的 byte address、line offset 和 line count；`hpu_mem_config.json` 给出 HPU_MEM window 值和语义 CSR 编程顺序
@@ -190,4 +192,4 @@ ctest --test-dir build --output-on-failure
 
 ## 6. 当前交付边界
 
-软件侧已完成指令生成、编码、完整密文乘法/重线性化 reference golden、独立 `uint32` 硬件镜像、q/Barrett `mod_ctx`、逐 stage twiddle、256B line 映射、HPU_MEM window 配置和 RV 接口冒烟流。硬件直接执行仍依赖 CSR 数字偏移、指令 `rs1/rs2` 绑定、scratch 布局和 DMA/`psync` 完成关系；详细签字项见 `doc/HPU_TEST_DELIVERY.md`。
+软件侧已完成指令生成、编码、完整密文乘法/重线性化 reference golden、独立 `uint32` 硬件镜像、q/Barrett `mod_ctx`、逐 stage twiddle、256B line 映射、HPU_MEM window 配置和 RV 接口冒烟流。`psync` 已按控制逻辑的统一 inflight 语义处理；硬件直接执行仍依赖 CSR 数字偏移、指令 `rs1/rs2` sideband 绑定、scratch 布局和 `mod_table_base_line` 绑定。详细签字项见 `doc/HPU_TEST_DELIVERY.md`。

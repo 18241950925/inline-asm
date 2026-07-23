@@ -1,13 +1,13 @@
 # HPU 最新文档符合性审计
 
-审计日期：2026-07-20
+审计日期：2026-07-23
 
 ## 1. 审计基线
 
 本审计以以下飞书文档为依据：
 
-1. [HPU 集成与编程手册](https://icnj64z5e8zz.feishu.cn/wiki/NZEgwsvshiQ6Twkrxvtck3UGnXg)，V0.2，2026-07-10。跨模块接口、命令表、CSR、SRAM、DMA 和软件流程的首要基线。
-2. [HPU 控制逻辑设计文档](https://icnj64z5e8zz.feishu.cn/wiki/KOlSwfEEtiMuqvkTppPcyJElnyf)，v0.4，2026-05-31。26-bit 命令译码、对象状态、allocator、`pmodld`、`pfree` 的实现基线。
+1. [HPU 控制逻辑设计文档](https://icnj64z5e8zz.feishu.cn/wiki/KOlSwfEEtiMuqvkTppPcyJElnyf)，v0.4，2026-05-31。按项目负责人确认，作为当前 26-bit 命令、对象状态、allocator、small Bank 5、`pmodld`、`pfree` 和 `psync` 的首要基线。
+2. [HPU 集成与编程手册](https://icnj64z5e8zz.feishu.cn/wiki/NZEgwsvshiQ6Twkrxvtck3UGnXg)，V0.2，2026-07-10。用于跨模块接口、CSR、SRAM、DMA 和软件流程；与控制逻辑文档冲突时不覆盖上述控制逻辑口径。
 3. [RISC-V核内接口设计](https://icnj64z5e8zz.feishu.cn/wiki/QE8MwYGIciNwoYkjomCcZbnmnOh)。核内 custom0/custom1 发射路径基线；其中 custom1 章节与集成手册存在冲突，见第 4 节。
 4. [HPU_PE_反串讲](https://icnj64z5e8zz.feishu.cn/wiki/T7pTwV4eiiJbXHkTkrAcgDzxn0g)，v0.1，2026-06-22。PE 位宽、Barrett、twiddle 和 NTT/INTT 数据通路验证基线。
 5. [HPU](https://icnj64z5e8zz.feishu.cn/wiki/MZkHwbivGiOs7ekMGb0cMSk5nTY)。知识库根文档，包含新旧章节，只用于定位历史约定，不作为单一冻结版本。
@@ -21,31 +21,26 @@
 - 文档约定：`PSYNC=0111`，`PFREE=1000`。
 - 原项目：`PFREE=0111`，`PSYNC=1000`。
 - 当前状态：已修复编码器、编码单测、delivery 检查和项目指令手册。
-- 新的 RV 编码示例：`pfree p5 = 0x8A00000B`，`psync 31,7 = 0x7FF0000B`。
+- 当前 RV 编码示例：`pfree p5 = 0x8140000B`，`psync = 0x7000000B`。
+
+### A1. custom0 与 26-bit precode 字段契约（已修复，2026-07-23）
+
+冻结映射为：
+
+```text
+cmd26[25]   = custom_kind (0=custom0, 1=custom1)
+cmd26[24:0] = control payload
+```
+
+当前实现已经：
+
+1. 将 STG 的 stage 移到原始指令 `[13:10]`，mode/flag 分别使用 `[9:8]`、`[7]`。
+2. 将 AR3 立即数模式移动到 2-bit MODE 的 `[9:8]`。
+3. 增加 `precode_command26()`，所有可编码算子同时输出 `.inst32` 和 `.cmd26`。
+4. custom1 precode 将原始指令的 `flag/OBJ_ID/TYPE/DIR` 重排到控制 payload，`rs1/rs2` 作为 line offset/count sideband。
+5. 生成 `expected_cmd26.csv`，逐条记录源 payload、控制 payload、custom kind 和最终命令。
 
 ## 3. 项目与最新文档的差异
-
-### A1. custom0 的 32-bit 到 26-bit 字段契约未对齐（P0）
-
-本地证据：
-
-- `encode/src/encoder.cpp` 的 AR3 将 `mode` 放在原始指令 `[13:10]`、`flag` 放在 `[9:7]`。
-- STG 将 `stage/idx0` 放在 `[21:18]`，另保留 `idx1` 和 4-bit `mode`。
-- SYNC 仍编码 5-bit `tag` 和 3-bit `mode`。
-
-文档来源：
-
-- 《HPU 集成与编程手册》3.1.3：内部 custom0 为 `[24:21] OPC`、`[20:18] PDST`、`[17:15] PSRC1`、`[14:7] OP2_8`、`[6:3] stage_id`、`[2:1] mode`、`[0] flag`。
-- 《HPU 控制逻辑设计文档》“命令格式与译码”章节给出相同 26-bit 字段，并说明 `MODE[0]` 选择 `pmul/pmac` 立即数。
-
-影响：如果核侧只是把 `{cmd_kind, inst[31:7]}` 送入 HPU，则非零 NTT stage、mode、flag 会被 RTL 解释到错误字段。当前仓库也没有生成 26-bit 预编码期望值，无法证明外部 precode bridge 已完成重排。
-
-修改建议：
-
-1. 冻结一张“RISC-V 32-bit 指令 -> HPU 26-bit 命令”逐位映射表。
-2. 在编码库中增加独立的 `encode_cmd26()`，不要只验证 `.inst32`。
-3. 若核侧直接转发 `inst[31:7]`，则重排 STG/mode/flag；若核侧负责重排，则在 RV IT 中逐字段验证该 bridge。
-4. 生成 `expected_cmd26.csv`，覆盖所有 OPC、stage 0/15、立即数模式、flag 和保留位。
 
 ### A2. `pmodld` 旧“模上下文对象”语义（已修复，2026-07-21）
 
@@ -54,19 +49,15 @@
 当前实现已经完成以下迁移：
 
 1. 汇编语法改为 `pmodld mod_id`，范围 0..255；旧 `psrc/idx1/cfg15` 语法作为负例拒绝。
-2. 原始 32-bit 指令的 `MOD_ID` 编码在 `[21:14]`，去掉低 7-bit opcode 后对应内部命令 `OP2_8[14:7]`。
+2. 原始 32-bit 指令的 `MOD_ID` 编码在 `[21:14]`，经过 custom0 precode 后对应 `cmd26[14:7]`。
 3. 所有算子生成器均改为 `pmodld(i)`，不再把 `p4` 编入 `pmodld`。
-4. `num_q + num_p` 上限从旧 3-bit context 空间的 8 改为 8-bit `MOD_ID` 空间的 256；对象槽位仍独立保持 8 个。
+4. `MOD_ID` 编码仍为 8-bit；根据 `SMALL_BANK_LINES=8`、每 line 16 context，生成器物理上限为 128。对象槽位仍独立保持 8 个。
 
-`dload type=2` 仍使用 custom1 对象号作为模表镜像的 DMA 传输句柄。该搬运如何绑定到 Bank 5 固定 `MOD_TABLE_BASE_LINE=0x1400`，仍属于 custom1/runtime 集成项，不属于 `pmodld` 编码本身。
+`dload type=2, flag[0]=1` 现在显式请求 allocator 将模表对象分配到 small Bank 5；生成器在首条 `pmodld` 前插入 `psync`。模表对象是具有 `ALLOC/V/busy/base/len` 的真实逻辑对象，不再描述为“仅 DMA 句柄”。剩余接口项是 `mod_table_base_line` 与该对象实际 `base` 的绑定。
 
-### A3. `pfree` 对象字段和 `psync` 载荷仍是旧格式（P0）
+### A3. `pfree` 对象字段和 `psync` 载荷（已修复，2026-07-23）
 
-本地证据：`pfree` 把对象写入 CFG 的 `IDX0/PDST` 位置；`psync` 继续接受 `tag[4:0]` 和 `mode[2:0]`。
-
-文档来源：《HPU 控制逻辑设计文档》说明 `PFREE` 使用 `PSRC/OBJ_ID`，不进入 PE；《HPU 集成与编程手册》只定义 `psync` 为统一 inflight 屏障，没有定义当前项目的 5-bit tag 语义。
-
-修改建议：在 A1 的 precode ABI 中明确 `pfree.obj_id` 的唯一位段；删除或正式定义 `psync tag`。在定义冻结前，不能只凭 OPC 正确就判定 RV/控制逻辑 IT 通过。
+`pfree` 对象已移动到原始 custom0 `PSRC/OBJ_ID=[24:22]`；其他载荷位为 0。`psync` 语法改为无操作数，所有载荷位为 0，并按控制逻辑统一 inflight 屏障使用。
 
 ### A4. 当前 `.inst32` 不是硬件可执行 DMA 流（P0）
 
@@ -122,7 +113,7 @@
 
 ### A8. 参数检查没有覆盖本地 SRAM/PE 能力（P1）
 
-本地证据：NTT 和完整乘法仍主要检查 N 为 2 的幂。旧 context 数上限 8 已随 A2 修复为 8-bit `MOD_ID` 上限 256，但尚未统一检查本地 SRAM 峰值驻留等目标能力。
+本地证据：NTT 和完整乘法仍主要检查 N 为 2 的幂。context 数已按 Bank 5 的 8 line 容量限制为 128，但尚未统一检查本地 SRAM 峰值驻留等目标能力。
 
 文档来源：《HPU 集成与编程手册》3.1.2、3.4；《HPU 控制逻辑设计文档》allocator 章节。
 
@@ -144,13 +135,13 @@
 
 修改建议：提供最小 runtime/driver 层，完成 HPU_MEM ownership、提交前 clean、读回前 invalidate、`HPU_STATUS/FAULT_STATUS` 检查、W1C fault、`irq_sync_done` 和 DMA 错误处理。
 
-### A11. NTT/INTT 的“原地”描述过强（P2）
+### A11. NTT/INTT 的“原地”描述过强（已修复，2026-07-23）
 
 本地证据：项目手册和 `src/util/ntt.cpp` 声明 NTT/INTT 原地执行。
 
 文档来源：《HPU 控制逻辑设计文档》描述 NTT/INTT out-of-place 分配并在完成后提交新 base；《HPU_PE_反串讲》13.6 又记录设计版本存在 in-place/out-of-place 差异。
 
-修改建议：软件 ABI 应表述为“同一 logical object id，物理 base 可由 controller 重分配”，不要承诺物理原地。物理策略由 RTL 版本清单冻结。
+当前软件 ABI 已统一表述为“同一 logical object id，物理 base 可由 controller 在 stage 完成后重分配并提交”，不再承诺物理原地。PE 文档中的版本差异仍需由 RTL release note 记录，但不会改变软件对象号。
 
 ## 4. 飞书文档之间需要硬件负责人确认的矛盾
 
@@ -158,16 +149,16 @@
 
 | ID | 矛盾 | 来源文档 | 建议冻结口径 |
 | --- | --- | --- | --- |
-| C1 | `psync` 是否等待 custom1/DMA | 《HPU》2.3 明确说只覆盖 custom0；《HPU 集成与编程手册》3.2/9.1 和《HPU 控制逻辑设计文档》统一 inflight 描述包含 extmem 完成 | 优先采用 2026-07-10 集成手册的统一 inflight；RTL owner 在测试计划中确认 |
-| C2 | custom1 是 rs1/rs2 line sideband，还是 VA 经 DTLB 后形成 `{paddr,len,dir,flags}` descriptor | 《HPU 集成与编程手册》5.2.2/9.1 与《RISC-V核内接口设计》custom1 HpuUnit 章节相反 | 在核/HPU 接口 ICD 中冻结；按用户决定，本次不改项目 custom1 位域 |
+| C1 | `psync` 是否等待 custom1/DMA | 按当前首要基线《HPU 控制逻辑设计文档》，统一 inflight 完成包含 `extmem_done_pulse` | 已按包含 DMA 完成实现；模表 dload 后显式插入 `psync` |
+| C2 | custom1 是 rs1/rs2 line sideband，还是 VA 经 DTLB 后形成 `{paddr,len,dir,flags}` descriptor | 《HPU 集成与编程手册》5.2.2/9.1 与《RISC-V核内接口设计》custom1 HpuUnit 章节相反 | 按用户决定，保留项目现有 `rs1/rs2` 32-bit 位域，仅在原保留 `inst[8]` 增加 `flag[0]`；precode 后按控制逻辑命令格式消费 |
 | C3 | 模上下文记录是 `mu64+reserved32` 还是 `mu48+reserved48` | 《HPU 控制逻辑设计文档》写 `{reserved[31:0],mu[63:0],q[31:0]}`；《HPU 集成与编程手册》3.5.4 写 `{reserved[47:0],mu[47:0],q[31:0]}` | 以 PE 实际 48-bit 端口为准；合法 q 下两种全零高位镜像字节兼容，但文档统一为 mu48 |
 | C4 | NTT/INTT 物理 in-place 或 out-of-place | 《HPU 控制逻辑设计文档》为 out-of-place；《HPU_PE_反串讲》13.6 记录“设计改了 in-place / 分 stage 混合”的未决说明 | 软件只承诺 logical object id；RTL release note 给出物理策略 |
-| C5 | 32-bit 原始指令与 26-bit 内部命令由谁重排 | 《RISC-V核内接口设计》custom0 输出 `imm[31:7]` 25-bit；《HPU 集成与编程手册》要求输入统一 26-bit 预编码命令 | 明确 precode bridge 的模块归属并交付逐位映射与 RTL 单测 |
+| C5 | 32-bit 原始指令与 26-bit 内部命令映射 | 《HPU 控制逻辑设计文档》v0.4 规定 `cmd[25]=cmd_kind`；《RISC-V核内接口设计》只确认核侧可提取 custom0 的 `inst[31:7]`，其中后续 custom1 descriptor 方案与控制逻辑的统一命令入口不同 | 按项目负责人最新确认，以《HPU 控制逻辑设计文档》为准：kind 位于最高位，custom1 由 precode 重排语义字段并携带独立 sideband |
 
 ## 5. 建议实施顺序
 
-1. 冻结 C1-C5，并形成带版本号的 machine-readable target ABI。
-2. 完成 A1/A3：冻结其余 custom0/precode、`pfree/psync` 字段及 26-bit decode 测试；A2 `pmodld` 已完成。
+1. 冻结仍未解决的 C2-C4，并形成带版本号的 machine-readable target ABI；C1/C5 已冻结。
+2. A1/A2/A3 已完成，持续用 RV smoke 的 32/26-bit 期望表回归。
 3. 完成 A4、A6、A10：生成真实 DMA sideband、CSR 程序和可运行 host harness。
 4. 完成 A5、A7-A9：重做物理 twiddle、目标参数校验和 PE bit-exact UT。
 5. 将 `.inst32 + cmd26 + HPU_MEM image + CSR sequence + expected checkpoints` 一起接入 RTL IT；只有该流程通过后，才能把 `HARDWARE_EXECUTION` 从 `CONDITIONAL` 改为 `PASS`。

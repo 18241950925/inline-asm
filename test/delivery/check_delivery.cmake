@@ -5,6 +5,7 @@ endif()
 set(REQUIRED_FILES
     "output/ciphertext_multiply.asm"
     "outputs/ciphertext_multiply/ciphertext_multiply.inst32"
+    "outputs/ciphertext_multiply/ciphertext_multiply.cmd26"
     "outputs/ciphertext_multiply/test_data/params.json"
     "outputs/ciphertext_multiply/test_data/artifact_manifest.csv"
     "outputs/ciphertext_multiply/test_data/input/ct_a_q.bin"
@@ -28,7 +29,9 @@ set(REQUIRED_FILES
     "outputs/ciphertext_multiply/test_data/hardware/constants/twiddle/intt/basis_00/stage_11.u32.bin"
     "outputs/rv_interface_smoke/rv_interface_smoke.asm"
     "outputs/rv_interface_smoke/rv_interface_smoke.inst32"
+    "outputs/rv_interface_smoke/rv_interface_smoke.cmd26"
     "outputs/rv_interface_smoke/test_data/expected_decode.csv"
+    "outputs/rv_interface_smoke/test_data/expected_cmd26.csv"
     "outputs/rv_interface_smoke/test_data/negative_cases.asm.txt"
     "outputs/intt/test_data/input.hex.txt"
     "outputs/intt/test_data/expected.hex.txt"
@@ -43,7 +46,8 @@ foreach(CASE_NAME ntt intt mm bconv modup pmult cmult moddown keyswitch)
         "outputs/${CASE_NAME}/test_data/hardware/hpu_mem_config.json"
         "outputs/${CASE_NAME}/test_data/hardware/line_map.csv"
         "outputs/${CASE_NAME}/test_data/hardware/mod_ctx_map.csv"
-        "outputs/${CASE_NAME}/test_data/hardware/twiddle_map.csv")
+        "outputs/${CASE_NAME}/test_data/hardware/twiddle_map.csv"
+        "outputs/${CASE_NAME}/${CASE_NAME}.cmd26")
 endforeach()
 list(APPEND REQUIRED_FILES "outputs/auto/test_data/STATUS.md")
 
@@ -69,6 +73,12 @@ if(NOT HARDWARE_ABI MATCHES "\"coefficient_bits\": 32")
 endif()
 if(NOT HARDWARE_ABI MATCHES "\"line_bytes\": 256")
     message(FATAL_ERROR "Hardware ABI does not use 256-byte lines")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"dload_flag0_small_bank\": 1")
+    message(FATAL_ERROR "Hardware ABI does not select Bank 5 for mod_ctx dload")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"max_contexts\": 128")
+    message(FATAL_ERROR "Hardware ABI does not enforce the 8-line Bank 5 capacity")
 endif()
 
 file(READ "${ROOT}/outputs/ciphertext_multiply/test_data/hardware/hpu_mem_config.json" HPU_MEM_CONFIG)
@@ -115,11 +125,14 @@ foreach(REMOVED_MNEMONIC pshcfg pshuf pseed psample)
 endforeach()
 
 file(READ "${ROOT}/outputs/rv_interface_smoke/test_data/expected_decode.csv" RV_EXPECTED_DECODE)
-if(NOT RV_EXPECTED_DECODE MATCHES "0x603FC00B,custom0,\"pmodld 255\"")
+if(NOT RV_EXPECTED_DECODE MATCHES "0x603FC00B,0x0C07F80,custom0,\"pmodld 255\"")
     message(FATAL_ERROR "RV decode expectations are missing the 8-bit MOD_ID pmodld encoding")
 endif()
-if(NOT RV_EXPECTED_DECODE MATCHES "0x8A00000B,custom0,\"pfree p5\"")
+if(NOT RV_EXPECTED_DECODE MATCHES "0x8140000B,0x1028000,custom0,\"pfree p5\"")
     message(FATAL_ERROR "RV decode expectations are missing the architectural pfree encoding")
+endif()
+if(NOT RV_EXPECTED_DECODE MATCHES "0x00B5292B,0x2000424,custom1,\"dload x10, x11, p4, 2, 1\"")
+    message(FATAL_ERROR "RV decode expectations are missing mod_ctx small-bank flag[0]")
 endif()
 
 file(READ "${ROOT}/outputs/rv_interface_smoke/test_data/negative_cases.asm.txt" RV_NEGATIVE_CASES)
@@ -137,7 +150,7 @@ function(CHECK_OBJECT_LIFECYCLE RELATIVE_PATH)
 
     file(STRINGS "${ROOT}/${RELATIVE_PATH}" ASM_LINES)
     foreach(LINE IN LISTS ASM_LINES)
-        if(LINE MATCHES "\"dload [^,]+, [^,]+, p([0-7]), [0-3]")
+        if(LINE MATCHES "\"dload [^,]+, [^,]+, p([0-7]), [0-3], [01]")
             set(SLOT "${CMAKE_MATCH_1}")
             if(LIVE_${SLOT})
                 message(FATAL_ERROR "${RELATIVE_PATH}: dload overwrites live object p${SLOT}")
@@ -169,16 +182,46 @@ foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch cip
     CHECK_OBJECT_LIFECYCLE("output/${CASE_NAME}.asm")
 endforeach()
 
+function(CHECK_MOD_CONTEXT_LOAD RELATIVE_PATH)
+    set(WAITING_FOR_SYNC 0)
+    file(STRINGS "${ROOT}/${RELATIVE_PATH}" ASM_LINES)
+    foreach(LINE IN LISTS ASM_LINES)
+        if(LINE MATCHES "\"dload [^,]+, [^,]+, p[0-7], 2, 0")
+            message(FATAL_ERROR "${RELATIVE_PATH}: mod_ctx dload does not set small-bank flag[0]")
+        elseif(LINE MATCHES "\"dload [^,]+, [^,]+, p[0-7], 2, 1")
+            set(WAITING_FOR_SYNC 1)
+        elseif(WAITING_FOR_SYNC AND LINE MATCHES "\"pmodld ")
+            message(FATAL_ERROR "${RELATIVE_PATH}: pmodld can issue before mod_ctx DMA completion")
+        elseif(WAITING_FOR_SYNC AND LINE MATCHES "\"psync")
+            set(WAITING_FOR_SYNC 0)
+        endif()
+    endforeach()
+    if(WAITING_FOR_SYNC)
+        message(FATAL_ERROR "${RELATIVE_PATH}: mod_ctx DMA has no following psync")
+    endif()
+endfunction()
+
+foreach(CASE_NAME ntt intt bconv pmult cmult modup moddown auto keyswitch ciphertext_multiply)
+    CHECK_MOD_CONTEXT_LOAD("output/${CASE_NAME}.asm")
+endforeach()
+
 file(STRINGS "${ROOT}/outputs/ciphertext_multiply/ciphertext_multiply.inst32" INST32_LINES)
 list(LENGTH INST32_LINES INST32_COUNT)
 if(INST32_COUNT LESS 2000)
     message(FATAL_ERROR "Ciphertext multiply instruction stream is unexpectedly short")
+endif()
+file(STRINGS "${ROOT}/outputs/ciphertext_multiply/ciphertext_multiply.cmd26" CMD26_LINES)
+list(LENGTH CMD26_LINES CMD26_COUNT)
+if(NOT CMD26_COUNT EQUAL INST32_COUNT)
+    message(FATAL_ERROR "32-bit instruction and 26-bit precode counts differ")
 endif()
 
 file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "SOFTWARE_DELIVERY=PASS\n"
     "FHE_REFERENCE=PASS\n"
     "ASM_ENCODING=PASS\n"
+    "PRECODE_CMD26=PASS\n"
+    "MOD_CTX_SMALL_BANK_FLAG=PASS\n"
     "INSTRUCTION_SET_11=PASS\n"
     "PFREE_LIFECYCLE=PASS\n"
     "RV_INTERFACE_SMOKE=PASS\n"
@@ -189,6 +232,6 @@ file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "STAGE_TWIDDLE_LAYOUT=PASS\n"
     "CIPHERTEXT_MULTIPLY_INST32_COUNT=${INST32_COUNT}\n"
     "HARDWARE_EXECUTION=CONDITIONAL\n"
-    "PENDING=numeric CSR offsets, instruction rs1/rs2 binding, scratch map, DMA completion semantics\n")
+    "PENDING=numeric CSR offsets, instruction rs1/rs2 sideband binding, scratch map, mod_table_base_line binding\n")
 
 message(STATUS "HPU software delivery check PASS (${INST32_COUNT} ciphertext-multiply instructions)")

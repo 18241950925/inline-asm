@@ -41,7 +41,9 @@ std::string generate_hpu_cmult_body_asm(
     const int POBJ_B = 1;
     const int POBJ_OUT = 2;
 
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx);
+    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     for (int i = 0; i < num_q; ++i) {
         asm_code << "        /* q_" << i << " */\n";
 
@@ -82,7 +84,7 @@ std::string generate_hpu_cmult_body_asm(
     asm_code << hpu::pfree(POBJ_MOD_CTX);
 
     if (append_psync) {
-        asm_code << hpu::psync(0);
+        asm_code << hpu::psync();
     }
 
     return asm_code.str();
@@ -187,7 +189,7 @@ std::string generate_hpu_cmult_asm(
 //     }
 
 //     if (append_psync) {
-//         asm_code << hpu::psync(0);
+//         asm_code << hpu::psync();
 //     }
 
 //     asm_code << "        : \n";

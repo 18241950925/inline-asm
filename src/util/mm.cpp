@@ -25,6 +25,9 @@ std::string generate_hpu_mm_asm(
     asm_code << "void hpu_mm_complete(void) {\n";
 
     asm_code << "    __asm__ volatile(\n";
+    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx,
+                           hpu::DloadFlag::small_bank);
+    asm_code << hpu::psync();
     asm_code << hpu::pmodld(0);
     asm_code << generate_hpu_mm_body_asm(obj_a, obj_b, obj_c);
     if (obj_b != obj_a) {
@@ -36,7 +39,7 @@ std::string generate_hpu_mm_asm(
     asm_code << hpu::pfree(mod_ctx_obj);
 
     if (append_psync) {
-        asm_code << hpu::psync(0);
+        asm_code << hpu::psync();
     }
 
     asm_code << "        : \n";

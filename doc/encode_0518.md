@@ -1,6 +1,6 @@
 # 2026-05-18 编码模块接入与当前交付流程
 
-本文件记录 2026 年 5 月 18 日完成的编码链路接入工作，并按当前工程结构说明 HPU 指令生成、32 位编码、FHE 软件 reference 和测试数据交付流程。
+本文件记录编码链路接入工作，并按 2026 年 7 月 23 日的当前工程结构说明 HPU 指令生成、32-bit RV 指令、26-bit HPU 命令、FHE 软件 reference 和测试数据交付流程。
 
 ## 1. 当前结论
 
@@ -89,6 +89,7 @@ outputs/<case>/
 ├── <case>.cpp
 ├── <case>.asm
 ├── <case>.inst32
+├── <case>.cmd26
 └── test_data/
     ├── README.md
     ├── params.json
@@ -118,9 +119,16 @@ outputs/<case>/
 
 ## 5. 当前编码状态
 
-当前编码器只接受 11 条体系结构指令：`padd`、`psub`、`pmul`、`pmac`、`pntt`、`pintt`、`pmodld`、`pfree`、`psync`、`dload` 和 `dstore`。`pmodld` 使用 MOD 格式，只接受一个 8-bit `MOD_ID` 并编码到 `OP2_8`；`pfree` 使用 CFG 格式，`IDX0` 指定释放对象，其余 CFG 字段为零。旧的 `pshcfg/pshuf/pseed/psample` 已移除并放入 RV 负例；`pmul/pmac` 的小立即数形式继续使用原助记符，不再使用 `pmuli/pmaci`。
+当前编码器只接受 11 条体系结构指令：`padd`、`psub`、`pmul`、`pmac`、`pntt`、`pintt`、`pmodld`、`pfree`、`psync`、`dload` 和 `dstore`。`pmodld` 使用 MOD 格式，只接受一个 8-bit `MOD_ID` 并编码到 `OP2_8`；`pfree` 使用 CFG 格式，由 `PSRC` 指定释放对象，其余字段为零；`psync` 不携带软件操作数。旧的 `pshcfg/pshuf/pseed/psample` 已移除并放入 RV 负例；`pmul/pmac` 的小立即数形式继续使用原助记符，不再使用 `pmuli/pmaci`。
 
-| 算子 | ASM | `.inst32` | reference test data |
+每条编码结果同时生成两种表示：
+
+- `.inst32`：RV 侧看到的原始 32-bit custom 指令。
+- `.cmd26`：控制逻辑接收的命令，`cmd26[25]=custom_kind`。custom0 的 payload 为 `inst[31:7]`；custom1 将 `flag/OBJ_ID/TYPE/DIR` 重排进 payload，`rs1/rs2` 形成独立 line offset/count sideband。
+
+`dload` 语法为 `dload rs1, rs2, pdst, type, small_bank`。`small_bank` 编码到原始 `inst[8]`；模上下文固定使用 `type=2, small_bank=1` 请求 Bank 5，并在首条 `pmodld` 前执行 `psync`。
+
+| 算子 | ASM | `.inst32` / `.cmd26` | reference test data |
 | --- | --- | --- | --- |
 | `ntt/intt/mm/bconv/pmult/cmult/modup/moddown/keyswitch` | 已生成 | 已生成 | 已生成 |
 | `ciphertext_multiply` | 已生成 | 已生成 | 已生成完整 FHE 流程数据 |
@@ -136,15 +144,15 @@ outputs/<case>/
 - `src/main.cpp`：HPU 指令流生成参数。
 - `test/reference/main.cpp`：FHE reference 和测试向量参数。
 
-`outputs/*/test_data/params.json` 是生成结果，不是输入配置，重新生成时会覆盖。修改 `N/Q/P/dnum` 时需同步修改上述两处，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 256`、所有 RNS 模数不超过 32 bit 等当前实现约束。8 个对象槽位与 8-bit `MOD_ID` 模表是独立资源。默认完整乘法参数为 `N=4096, Q=4, P=3, dnum=2`。
+`outputs/*/test_data/params.json` 是生成结果，不是输入配置，重新生成时会覆盖。修改 `N/Q/P/dnum` 时需同步修改上述两处，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 128`、所有 RNS 模数不超过 32 bit 等当前实现约束。8 个逻辑对象槽位与 8-bit `MOD_ID` 编码空间是独立资源；Bank 5 当前只有 8 line，每 line 容纳 16 个模上下文，所以物理上限是 128。默认完整乘法参数为 `N=4096, Q=4, P=3, dnum=2`。
 
 ## 7. 当前交付边界
 
-软件侧已经完成指令生成、`.inst32` 编码、完整密文乘法与重线性化 reference、算子 UT 数据和 RV 接口冒烟流。以下信息仍需硬件侧确认后才能把当前计算顺序流变成可直接执行程序：
+软件侧已经完成指令生成、`.inst32`/`.cmd26` 编码、完整密文乘法与重线性化 reference、算子 UT 数据和 RV 接口冒烟流。以下信息仍需硬件侧确认后才能把当前计算顺序流变成可直接执行程序：
 
 1. `dload/dstore` 的 DDR 地址寄存器和偏移 ABI；当前完整乘法中仍使用 `x0/x0` 占位。
 2. HPU_MEM CSR 数字偏移、`line_map.csv` 到指令 `rs1/rs2` 的 runtime 绑定，以及 RTL 对 V1 `mod_ctx`/DIT twiddle ABI 的签字。
 3. HPU SRAM/scratch 容量、对象槽位驻留规则，以及 `pfree`/`dstore rel=1` 的释放完成时机。
-4. DMA 完成、`psync`、指令发射和异常处理的精确关系。
+4. runtime 如何把生成的 HPU_MEM line offset/count 写入 `dload/dstore` 使用的寄存器，以及异常上报规则。
 
 完整验收项和硬件联调签字表见 `doc/HPU_TEST_DELIVERY.md`。
