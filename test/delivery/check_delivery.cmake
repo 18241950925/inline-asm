@@ -77,8 +77,29 @@ endif()
 if(NOT HARDWARE_ABI MATCHES "\"dload_flag0_small_bank\": 1")
     message(FATAL_ERROR "Hardware ABI does not select Bank 5 for mod_ctx dload")
 endif()
-if(NOT HARDWARE_ABI MATCHES "\"max_contexts\": 128")
-    message(FATAL_ERROR "Hardware ABI does not enforce the 8-line Bank 5 capacity")
+if(NOT HARDWARE_ABI MATCHES "\"small_bank_lines\": 32")
+    message(FATAL_ERROR "Hardware ABI does not use the latest 32-line Bank 5")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"regular_bank_count\": 5")
+    message(FATAL_ERROR "Hardware ABI does not describe the five regular SRAM banks")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"regular_bank_lines\": 1024")
+    message(FATAL_ERROR "Hardware ABI does not describe 1024 lines per regular SRAM bank")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"mod_table_base_line\": \"0x00001400\"")
+    message(FATAL_ERROR "Hardware ABI does not freeze MOD_TABLE_BASE_LINE at 0x1400")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"physical_context_capacity\": 512")
+    message(FATAL_ERROR "Hardware ABI does not describe Bank 5 physical context capacity")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"mod_id_bits\": 8")
+    message(FATAL_ERROR "Hardware ABI does not enforce the PMODLD MOD_ID width")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"mod_id_addressable_lines\": 16")
+    message(FATAL_ERROR "Hardware ABI does not distinguish MOD_ID reach from Bank 5 depth")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"max_contexts\": 256")
+    message(FATAL_ERROR "Hardware ABI does not cap contexts by the 8-bit MOD_ID address space")
 endif()
 if(NOT HARDWARE_ABI MATCHES "\"rs1_value\": \"HPU_MEM line offset\"")
     message(FATAL_ERROR "Hardware ABI does not freeze custom1 rs1 as the HPU_MEM line offset")
@@ -103,6 +124,15 @@ if(NOT HARDWARE_ABI MATCHES "\"stage_payload_words\": 2048")
 endif()
 if(NOT HARDWARE_ABI MATCHES "\"stage_payload_lines\": 32")
     message(FATAL_ERROR "Hardware ABI stage twiddles do not occupy N/128 HPU lines")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"pre_twist_execution\": \"explicit PMUL")
+    message(FATAL_ERROR "Hardware ABI does not explicitly execute the negacyclic pre-twist")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"intt_post_execution\": \"explicit PMUL")
+    message(FATAL_ERROR "Hardware ABI does not explicitly execute INTT normalization/inverse twist")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"physical_update\": \"out-of-place per stage")
+    message(FATAL_ERROR "Hardware ABI does not freeze NTT/INTT as physical out-of-place")
 endif()
 
 file(READ "${ROOT}/outputs/ciphertext_multiply/test_data/hardware/hpu_mem_config.json" HPU_MEM_CONFIG)
@@ -155,6 +185,24 @@ foreach(MARKER
         message(FATAL_ERROR "Missing ciphertext multiply stage marker: ${MARKER}")
     endif()
 endforeach()
+
+file(READ "${ROOT}/output/ntt.asm" NTT_ASM)
+string(FIND "${NTT_ASM}" "Negacyclic pre-twist: explicit PMUL" NTT_PRE_TWIST_POSITION)
+string(FIND "${NTT_ASM}" "pntt p" NTT_STAGE_POSITION)
+if(NTT_PRE_TWIST_POSITION EQUAL -1
+        OR NTT_STAGE_POSITION EQUAL -1
+        OR NTT_PRE_TWIST_POSITION GREATER_EQUAL NTT_STAGE_POSITION)
+    message(FATAL_ERROR "NTT stream does not execute the pre-twist before stage 0")
+endif()
+
+file(READ "${ROOT}/output/intt.asm" INTT_ASM)
+string(FIND "${INTT_ASM}" "pintt p" INTT_STAGE_POSITION)
+string(FIND "${INTT_ASM}" "INTT normalize and inverse-twist: explicit PMUL" INTT_POST_POSITION)
+if(INTT_STAGE_POSITION EQUAL -1
+        OR INTT_POST_POSITION EQUAL -1
+        OR INTT_STAGE_POSITION GREATER_EQUAL INTT_POST_POSITION)
+    message(FATAL_ERROR "INTT stream does not execute normalization/inverse twist after its stages")
+endif()
 
 string(FIND "${CIPHERTEXT_ASM}" "pfree p" PFREE_POSITION)
 if(PFREE_POSITION EQUAL -1)
@@ -230,7 +278,10 @@ function(CHECK_MOD_CONTEXT_LOAD RELATIVE_PATH)
     set(WAITING_FOR_SYNC 0)
     file(STRINGS "${ROOT}/${RELATIVE_PATH}" ASM_LINES)
     foreach(LINE IN LISTS ASM_LINES)
-        if(LINE MATCHES "\"dload [^,]+, [^,]+, p[0-7], 2, 0")
+        if(LINE MATCHES "\"dload [^,]+, [^,]+, p[0-7], [013], 1")
+            message(FATAL_ERROR
+                "${RELATIVE_PATH}: non-mod_ctx dload requests reserved small Bank 5")
+        elseif(LINE MATCHES "\"dload [^,]+, [^,]+, p[0-7], 2, 0")
             message(FATAL_ERROR "${RELATIVE_PATH}: mod_ctx dload does not set small-bank flag[0]")
         elseif(LINE MATCHES "\"dload [^,]+, [^,]+, p[0-7], 2, 1")
             set(WAITING_FOR_SYNC 1)
@@ -275,9 +326,12 @@ file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "CUSTOM1_LINE_SIDEBAND=PASS\n"
     "HPU_MEM_CSR_MAP=PASS\n"
     "MOD_CTX_Q32_MU48=PASS\n"
+    "MOD_TABLE_BASE_0X1400=PASS\n"
     "STAGE_TWIDDLE_LAYOUT=PASS\n"
+    "NEGACYCLIC_FACTORS_EXPLICIT=PASS\n"
+    "NTT_PHYSICAL_OUT_OF_PLACE=PASS\n"
     "CIPHERTEXT_MULTIPLY_INST32_COUNT=${INST32_COUNT}\n"
     "HARDWARE_EXECUTION=CONDITIONAL\n"
-    "PENDING=DMA instruction relocation/GPR loading, scratch map, mod_table_base_line binding\n")
+    "PENDING=DMA instruction relocation/GPR loading, scratch map, runtime cache/fault/interrupt handling\n")
 
 message(STATUS "HPU software delivery check PASS (${INST32_COUNT} ciphertext-multiply instructions)")

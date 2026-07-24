@@ -140,7 +140,7 @@ ctest --test-dir build --output-on-failure
 - Reference 参数位于 `test/reference/main.cpp` 的 `kN`、`kNumQ`、`kNumP`、`kDnum`、`kPlainModulus` 和 `kSeed`。
 - `outputs/*/test_data/params.json` 是生成结果，不是输入配置；直接修改后会在下一次生成时被覆盖。
 
-修改 `N/Q/P/dnum` 时必须同步修改两处源配置，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 128`、所有 Q/P 模数可用 `uint32` 表示等约束。当前统一示例为 `N=4096, Q=4, P=3, dnum=2`。`MOD_ID` 编码宽度为 8-bit，但当前 small Bank 5 只有 8 line、每 line 16 个 context，因此物理上限为 128；它与 8 个并发对象槽位是两个独立资源。
+修改 `N/Q/P/dnum` 时必须同步修改两处源配置，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 256`、所有 Q/P 模数可用 `uint32` 表示等约束。当前统一示例为 `N=4096, Q=4, P=3, dnum=2`。small Bank 5 为 32 line，固定范围 `0x1400..0x141F`，物理可放 512 个 context；由于 `MOD_ID` 只有 8 bit，软件可寻址上限为 256。它与 8 个并发对象槽位是两个独立资源。
 
 `hpu_delivery` 会为 `ciphertext_multiply` 自动生成与主配置一致的 `N=4096, Q=4, P=3, dnum=2` 输入、评估密钥、阶段 golden、最终输出、明文校验和 artifact checksum。它同时生成独立的 `uint32` HPU_MEM 镜像、q/Barrett 上下文、逐 stage twiddle、256B line offset/count，并从同一 reference 拆分出 NTT、INTT、MM、BConv、ModUp、PMULT、CMULT、ModDown 和 KeySwitch 的独立 UT 数据包。`auto/test_data/STATUS.md` 记录该算子当前的寄存器分配阻塞项。
 
@@ -148,7 +148,7 @@ ctest --test-dir build --output-on-failure
 ## 4. 关键设计实现说明
 
 - **基于 HPU 对象槽的 NTT/INTT：**
-  底层不再关注向量的大块切片 `l`。针对 `stage=0~log2(N)-1` 的蝶形运算，`pntt/pintt` 以**第一个对象槽位作为稳定的逻辑数据对象**，**第二个对象槽位作为 twiddle 对象**。控制器可以在 stage 完成时为数据对象提交新的物理 base；调用方只需保持逻辑对象号并在每个 stage 前装载对应 twiddle。
+  底层不再关注向量的大块切片 `l`。针对 `stage=0~log2(N)-1` 的蝶形运算，`pntt/pintt` 以**第一个对象槽位作为稳定的逻辑数据对象**，**第二个对象槽位作为 twiddle 对象**。控制器按物理 out-of-place 执行并在 stage 完成时提交新的 base；调用方保持逻辑对象号。Negacyclic NTT 在 stage 0 前显式 `PMUL psi^i`，INTT 在最终 stage 后显式 `PMUL (N^-1*psi^-i)`。
   
 - **切片感知的模提升运算：**
   为了支持分解字（Digit Decomposition），`modup` / `bconv` 在接口中新加入了 `q_offset` 参数与处理宽度 `num_q_digit`。使得在 `dnum > 1` 的外层循环下，基扩展算字能智能地识别应该处理当前分解下哪一部分素数环境与基偏移。
@@ -182,7 +182,7 @@ ctest --test-dir build --output-on-failure
 - 每个可编码算子同时生成 `.inst32` 和 `.cmd26`；`cmd26[25]` 区分 custom0/custom1，custom0 直接携带 `inst[31:7]`，custom1 按控制逻辑字段重排并另带 offset/count sideband
 - 需要阶段收敛时使用 `psync`
 - 当前 `.inst32` 输出仅覆盖可直接完成寄存器解析的 ASM；`auto` 仍含 `x_c0`、`x_offset`、`x_out` 等符号寄存器占位符，需在完成物理寄存器分配后再编码
-- `cmult` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32/.cmd26` 生成链路；其中 `ciphertext_multiply` 要求 `num_q % dnum == 0` 且 `num_q + num_p <= 128`
+- `cmult` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32/.cmd26` 生成链路；其中 `ciphertext_multiply` 要求 `num_q % dnum == 0` 且 `num_q + num_p <= 256`
 - `ciphertext_multiply/test_data` 已由软件 reference 自动生成；二进制格式、shape 和校验值见其中的 `params.json` 与 `artifact_manifest.csv`
 - 顶层 `.bin` 是 `uint64` 数学 golden；真正面向 HPU 加载的是 `test_data/hardware/` 下按 256B line 补齐的 `.u32.bin`
 - `hardware/line_map.csv` 给出每个对象的 byte address、line offset 和 line count；custom1 固定使用 `GPR[rs1]=line_offset`、`GPR[rs2]=line_count`（256B line 单位），`hpu_mem_config.json` 给出 HPU_MEM window 值和 `0x00..0x18` CSR 编程顺序
@@ -192,4 +192,4 @@ ctest --test-dir build --output-on-failure
 
 ## 6. 当前交付边界
 
-软件侧已完成指令生成、编码、完整密文乘法/重线性化 reference golden、独立 `uint32` 硬件镜像、`q32+mu48+reserved48` 模上下文、每 stage 固定 `N/2` 个物理 twiddle、256B line 映射、HPU_MEM CSR 配置和 RV 接口冒烟流。custom1 line sideband 与 `0x00..0x18` CSR 偏移已按最新集成手册冻结，`psync` 已按控制逻辑的统一 inflight 语义处理；硬件直接执行仍依赖 DMA relocation/GPR 装载、scratch 布局和 `mod_table_base_line` 绑定。详细签字项见 `doc/HPU_TEST_DELIVERY.md`。
+软件侧已完成指令生成、编码、完整密文乘法/重线性化 reference golden、独立 `uint32` 硬件镜像、`q32+mu48+reserved48` 模上下文、每 stage 固定 `N/2` 个物理 twiddle、显式 negacyclic pre/post factor、256B line 映射、HPU_MEM CSR 配置和 RV 接口冒烟流。custom1 line sideband、`0x00..0x18` CSR、32-line Bank 5、`MOD_TABLE_BASE_LINE=0x1400` 与物理 out-of-place 已按最新集成手册冻结；硬件直接执行仍依赖 DMA relocation/GPR 装载、scratch 布局及 cache/fault/interrupt runtime。详细签字项见 `doc/HPU_TEST_DELIVERY.md`。

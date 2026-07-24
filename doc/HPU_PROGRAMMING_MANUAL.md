@@ -1,8 +1,8 @@
 # HPU 软件编程手册
 
-版本：0.2
+版本：0.3
 适用实现：`inline-asm` 当前软件实现
-日期：2026-07-23
+日期：2026-07-24
 
 ## 前言
 
@@ -86,7 +86,14 @@ mu = floor(2^64 / q), 48-bit Barrett reciprocal
 `word2[31:16]` 与 `word3` 全部为 0。生成器会同时检查 q 范围和
 `mu >> 48 == 0`。
 
-模上下文对象通过 `dload type=2, flag[0]=1` 请求 small-bank 分配，allocator 将其物理 base 放入 `SMALL_BANK_ID=5`。当前 Bank 5 为 8 line，每 line 可放 16 个 128-bit context，因此物理模表最多容纳 128 个上下文。模表 DMA 完成后，`pmodld MOD_ID` 从该表选择当前上下文。执行计算指令前，软件必须先激活与当前 RNS limb 对应的上下文；切换 Q/P 基时必须重新执行 `pmodld`。
+模上下文对象通过 `dload type=2, flag[0]=1` 请求 small-bank 分配。最新硬件
+配置包含 Bank 0-4 五个 1024-line 普通 bank，以及
+`SMALL_BANK_ID=5` 的 32-line small bank；Bank 5 固定 line 范围为
+`0x1400..0x141F`，模表基址 `MOD_TABLE_BASE_LINE=0x1400`。Bank 5 物理上
+可容纳 512 个 128-bit context，但 `pmodld` 的 `MOD_ID` 只有 8 bit，因此
+当前软件 ABI 最多寻址 256 个 context，对应 `0x1400..0x140F`。其余 Bank 5
+空间不扩展 `MOD_ID` 编码。模表 DMA 完成后，`pmodld MOD_ID` 从该表选择当前
+上下文；切换 Q/P limb 前必须重新执行 `pmodld`。
 
 ### 1.5 指令顺序和对象生命周期
 
@@ -415,7 +422,10 @@ pntt pdata, ptwiddle, stage, mode, flag
 P[pdata] = NTT_STAGE(P[pdata], P[ptwiddle], stage, mode, flag, q)
 ```
 
-当前生成器把 `pdata` 视为同一 logical object id 下的读写对象，每条 `pntt` 只执行一个 stage。完整长度为 `N` 的 NTT 发出 `log2(N)` 条指令，stage 从 0 递增到 `log2(N)-1`。
+当前生成器把 `pdata` 视为同一 logical object id 下的读写对象，每条 `pntt`
+只执行一个 stage。物理执行固定为 out-of-place：controller 分配下一物理
+base，完成后提交给同一 logical object id 并释放旧 base。完整长度为 `N` 的
+NTT 发出 `log2(N)` 条指令，stage 从 0 递增到 `log2(N)-1`。
 
 | 操作数 | 范围 | 当前用法 |
 | --- | --- | --- |
@@ -439,6 +449,10 @@ pntt  p0, p3, 0, 0, 0
 pfree p3
 ```
 
+完整 negacyclic NTT 在 stage 0 前还会显式加载 `pre_twist.u32.bin`，并执行
+`pmul pdata, pdata, ptwiddle`，实现逐系数乘 `psi^i`。该步骤不是
+`pntt stage=0` 的隐含行为。
+
 硬件镜像为每个 stage 固定生成 `N/2` 个 little-endian `uint32`
 twiddle，即 `N/128` 条 256B line。当前物理顺序是 group-major DIT：
 对每个长度为 `length=2^(stage+1)` 的 butterfly group，依次写出
@@ -460,7 +474,10 @@ pintt pdata, ptwiddle, stage, mode, flag
 P[pdata] = INTT_STAGE(P[pdata], P[ptwiddle], stage, mode, flag, q)
 ```
 
-操作数范围和生命周期与 `pntt` 相同。当前汇编生成器按 `stage=0..log2(N)-1` 的顺序执行 INTT；`pdata` 的逻辑对象号在所有 stage 之间保持不变，控制器可在完成事件后提交新的物理 base。每个 stage 依次生成 `dload`、`pintt` 和 `pfree`，其中 `ptwiddle` 在当前 stage 使用后立即释放：
+操作数范围和生命周期与 `pntt` 相同。当前汇编生成器按
+`stage=0..log2(N)-1` 的顺序执行 INTT；`pdata` 的逻辑对象号在所有 stage
+之间保持不变，控制器对每个 stage 执行物理 out-of-place，完成后提交新的
+base 并释放旧空间。每个 stage 依次生成 `dload`、`pintt` 和 `pfree`：
 
 ```asm
 dload ..., ptwiddle, 1, 0
@@ -468,9 +485,18 @@ pintt pdata, ptwiddle, stage, 0, 0
 pfree ptwiddle
 ```
 
-软件 reference 的数学行为是：先对输入执行 bit reversal，再执行 radix-2 DIT 逆循环 NTT，随后逐系数乘 `N^-1 mod q` 完成归一化，最后逐系数乘 `psi^-i mod q` 完成负循环逆 twist。硬件数据包为每个 RNS 模数生成逐 stage 的逆 DIT twiddle，并额外生成 `post_untwist_scale.u32.bin`；其中第 `i` 项为 `N^-1 * psi^-i mod q`。每个 INTT stage 同样按上一节的 group-major 顺序展开为固定 `N/2` 个物理值；逐 stage twiddle 和 post factor 均使用 little-endian `uint32` canonical residue，每个镜像从新的 256B HPU line 开始，尾部补零。
+软件 reference 的数学行为是 radix-2 DIT 逆循环 NTT，随后逐系数乘
+`N^-1 * psi^-i mod q`，同时完成归一化和负循环 inverse twist。硬件数据包
+为每个 RNS 模数生成逐 stage 的逆 DIT twiddle以及
+`post_untwist_scale.u32.bin`；其中第 `i` 项为 `N^-1 * psi^-i mod q`。
+最终 `pintt` 后，生成器显式执行一次 `dload + pmul + pfree` 消费该 post
+factor，不再假设 PE 或最后一个 stage 隐式融合它。
 
-当前指令流没有单独发出 bit reversal、归一化或逆 twist 指令，且生成的 `dload x0, x0, ...` 地址仍是占位值。`abi.json` 当前约定 bit reversal 由 HPU 在 stage 0 前的内部 shuffle 完成；runtime 还需按照 `twiddle_map.csv` 将每个 stage 的 `dload` 绑定到对应 twiddle line，并由硬件在最后 stage 融合 `post_untwist_scale`，或在后续流程中显式完成同等的逐系数乘法。
+软件 reference 中的 bit-reversal 循环是其 radix-2 DIT 实现细节，不对应一条
+独立 HPU 指令。硬件通过 stream_ctrl 的 stage 地址生成与 PE lane transpose
+形成各 stage 配对，不再声明“stage 0 前隐式执行一次全多项式 shuffle”。
+runtime 需按 `twiddle_map.csv` 分别绑定 pre-twist、各 stage twiddle 和
+post factor 的 line offset/count。
 
 **示例**
 
@@ -498,9 +524,13 @@ active_mod_context = MOD_TABLE[line][slot]
 
 | 操作数 | 范围 | 含义 |
 | --- | --- | --- |
-| `mod_id` | 编码 0..255，当前配置 0..127 | Bank 5 模上下文表中的 8-bit 表项编号 |
+| `mod_id` | 0..255 | Bank 5 模上下文表中的 8-bit 表项编号 |
 
-一条 256B HPU line 可容纳 16 个 128-bit 模上下文，因此 `mod_id[7:4]` 选择相对 line，`mod_id[3:0]` 选择 line 内 slot。编码域允许 256 个编号，但当前 `SMALL_BANK_LINES=8`，所以生成器只允许 128 个物理 context。`pmodld` 不携带对象号，也不产生多项式结果；它改变后续模运算使用的 q/Barrett mu。
+一条 256B HPU line 可容纳 16 个 128-bit 模上下文，因此
+`mod_id[7:4]` 选择 `0x1400..0x140F` 中的相对 line，`mod_id[3:0]` 选择
+line 内 slot。Bank 5 共 32 line，但 8-bit `MOD_ID` 只能寻址前 16 line，
+所以生成器上限是 256 个 context。`pmodld` 不携带对象号，也不产生多项式
+结果；它改变后续模运算使用的 q/Barrett mu。
 
 模表的数据搬入与上下文选择是两个独立步骤。`dload type=2, flag[0]=1` 为模表逻辑对象建立 `ALLOC/V/busy/base/len` 状态，并请求 allocator 将物理 base 放到 Bank 5；随后的 `psync` 等待 DMA 完成。`pmodld` 只携带 `MOD_ID`，通过 cfg 读口访问模表并更新活动 q/mu。
 
@@ -587,7 +617,9 @@ on completion:
 | 2 | `mod_ctx` | 模上下文集合 |
 | 3 | `shuffle_cfg` | shuffle 配置；编码保留，旧 `pshuf` 指令已删除 |
 
-`small_bank=0` 使用普通 bank 分配；`small_bank=1` 设置 `flag[0]`，请求把长度不超过 8 line 的小对象分配到 Bank 5。模上下文生成器固定使用 `type=2, small_bank=1`。
+`small_bank=0` 使用普通 bank 分配；`small_bank=1` 设置 `flag[0]`，请求把
+长度不超过 32 line 的小对象分配到 Bank 5。模上下文生成器固定使用
+`type=2, small_bank=1`，模表固定从 `0x1400` 开始。
 
 `rs1` 和 `rs2` 是 5-bit RISC-V 寄存器编号。执行时固定解释为
 `GPR[rs1]=HPU_MEM line offset`、`GPR[rs2]=line count`，单位均为 256B；
@@ -687,6 +719,10 @@ pmac p2, p6, 7             # p2 += p6 * 7
 # q already selected with pmodld
 dload x10, x11, p0, 1, 0   # polynomial
 
+dload x12, x13, p3, 1, 0   # pre_twist = psi^i
+pmul  p0, p0, p3
+pfree p3
+
 dload x12, x13, p3, 1, 0   # stage 0 twiddle
 pntt  p0, p3, 0, 0, 0
 pfree p3
@@ -699,6 +735,9 @@ pfree p3
 dstore x16, x17, p0, 1
 psync
 ```
+
+完整 INTT 在最后一个 `pintt` 后还必须加载
+`post_untwist_scale = N^-1 * psi^-i` 并显式 `pmul`，再执行 `dstore`。
 
 ### 8.4 RNS 循环
 
@@ -776,9 +815,11 @@ ctest --test-dir build --output-on-failure
 以下内容不由当前编码器单独保证：
 
 1. relocation/runtime 是否把每条 DMA 的实际 line offset/count 装入 `rs1/rs2`。
-2. `mod_table_base_line` 如何绑定到 small-bank 模表对象的实际 `base`。
-3. NTT/INTT 各 stage 物理 base 的提交，以及 RTL 是否按已生成的 group-major 次序消费。
+2. runtime 是否按 `MOD_TABLE_BASE_LINE=0x1400` 将模表 DMA 搬入 Bank 5。
+3. RTL 是否按已生成的 group-major 次序消费 twiddle，并按 out-of-place 协议提交各 stage 新 base。
 4. cache maintenance、中断和 fault 的 runtime 实现。
 
 custom1 line sideband、HPU_MEM CSR、stage twiddle 数量/顺序和 mod context
-位布局已经冻结；上述列表是尚未实现的 runtime/RTL 行为，不是这些 ABI 的备选解释。
+位布局、Bank 5 地址、mod-table base、negacyclic pre/post factor 和物理
+out-of-place 规则已经冻结；上述列表是尚未实现的 runtime/RTL 行为，不是这些
+ABI 的备选解释。

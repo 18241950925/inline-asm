@@ -29,7 +29,7 @@ std::string generate_hpu_keyswitch_body_asm(
 
     if (num_q <= 0 || num_p <= 0 || dnum <= 0 || !is_power_of_two(N)
         || num_q % dnum != 0 || num_q + num_p > hpu::kMaxModContexts) {
-        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 128 mod contexts\n";
+        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 256 mod contexts\n";
         return asm_code.str();
     }
 
@@ -166,7 +166,7 @@ std::string generate_hpu_keyswitch_asm(
 
     if (num_q <= 0 || num_p <= 0 || !is_power_of_two(N) || dnum <= 0
         || num_q % dnum != 0 || num_q + num_p > hpu::kMaxModContexts) {
-        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 128 mod contexts\n";
+        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 256 mod contexts\n";
         asm_code << "}\n";
         return asm_code.str();
     }

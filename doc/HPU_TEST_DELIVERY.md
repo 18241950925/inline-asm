@@ -29,7 +29,10 @@ HPU_LINE_LAYOUT_256B=PASS
 CUSTOM1_LINE_SIDEBAND=PASS
 HPU_MEM_CSR_MAP=PASS
 MOD_CTX_Q32_MU48=PASS
+MOD_TABLE_BASE_0X1400=PASS
 STAGE_TWIDDLE_LAYOUT=PASS
+NEGACYCLIC_FACTORS_EXPLICIT=PASS
+NTT_PHYSICAL_OUT_OF_PLACE=PASS
 HARDWARE_EXECUTION=CONDITIONAL
 ```
 
@@ -60,14 +63,14 @@ Golden 严格执行以下顺序：
 
 ```text
 Encrypt(ctA, ctB)
-  -> NTT(ctA[0], ctA[1], ctB[0], ctB[1]) over Q
+  -> PMUL psi^i, then staged NTT(ctA[0], ctA[1], ctB[0], ctB[1]) over Q
   -> TensorProduct(t0, t1, t2) over Q
-  -> INTT(t0, t1, t2)
+  -> staged INTT(t0, t1, t2), then PMUL N^-1*psi^-i
   -> Decompose t2 into Q digits
   -> Hybrid ModUp each digit to full Q union P
-  -> NTT over Q union P
+  -> PMUL psi^i, then staged NTT over Q union P
   -> Multiply-accumulate with rlk[digit][0..1]
-  -> INTT over Q union P
+  -> staged INTT over Q union P, then PMUL N^-1*psi^-i
   -> ModDown P from both key-switch components
   -> (out0, out1) = (t0 + ks0, t1 + ks1)
   -> Decrypt and compare with mA * mB in Z_t[x]/(x^N+1)
@@ -111,11 +114,13 @@ Encrypt(ctA, ctB)
 `mu=floor(2^64/q)`，且 `65537 <= q <= 2^32-1`。按 `uint32` word
 查看时是 `q`、`mu[31:0]`、`{16'b0,mu[47:32]}`、全零保留字。模表通过
 `dload type=2, flag[0]=1` 请求分配到 small Bank 5，DMA 完成后由 `psync`
-建立可见性，再由 `pmodld MOD_ID` 选择表项。Bank 5 当前为 8 line，每 line
-放 16 条记录，因此 Q/P context 总数不得超过 128。
+建立可见性，再由 `pmodld MOD_ID` 选择表项。Bank 5 固定为
+`0x1400..0x141F` 共 32 line，物理可放 512 条记录；但 `MOD_ID` 为 8 bit，
+所以软件只允许 256 个 context，寻址 `0x1400..0x140F`。
 
-Twiddle 与软件 reference 一致，采用 negacyclic pre-twist、bit reversal、
-radix-2 DIT；INTT 另提供 `N^-1 * psi^-i` post factor。每个 stage 按
+Twiddle 与软件 reference 一致，采用 negacyclic pre-twist 和 radix-2 DIT；
+NTT stage 0 前显式执行 `PMUL psi^i`，INTT 最后一个 stage 后显式执行
+`PMUL (N^-1 * psi^-i)`，不依赖 PE 隐式归一化或 twist。每个 stage 按
 group-major butterfly 顺序展开为固定 `N/2` 个 `uint32`，即 `N/128` 条
 256B line。默认 `N=4096` 时每个 stage 恰为 2048 words、32 line，不再使用
 “唯一 twiddle 由各 group 复用”的压缩镜像。
@@ -153,7 +158,7 @@ group-major butterfly 顺序展开为固定 `N/2` 个 `uint32`，即 `N/128` 条
 以下五项必须由控制逻辑、SRAM、DMA 和软件负责人共同签字确认，确认后才能把当前交付从“软件可验收”升级为“硬件可直接运行”。数据包已经给出软件侧 V1 值和布局，签字重点是 RTL 是否按同一 ABI 消费：
 
 1. runtime 按已冻结的 `GPR[rs1]=line_offset`、`GPR[rs2]=line_count` 语义，将 `line_map.csv` 的具体值绑定到每条 DMA 指令。
-2. RTL 接受 V1 `mod_ctx = {reserved48, mu48, q32}`，Barrett 定点约定为 `mu=floor(2^64/q)`。
-3. RTL 的 `pntt/pintt stage` 接受 `twiddle_map.csv` 的 `N/2` group-major DIT 次序；当前数据为 canonical residue，不是 Montgomery 域。
+2. RTL 接受 V1 `mod_ctx = {reserved48, mu48, q32}`、32-line Bank 5 与固定 `MOD_TABLE_BASE_LINE=0x1400`。
+3. RTL 的 `pntt/pintt stage` 接受 `twiddle_map.csv` 的 `N/2` group-major DIT 次序、物理 out-of-place 提交，以及显式 pre/post PMUL；当前数据为 canonical residue，不是 Montgomery 域。
 4. ct、tensor、ModUp、rlk、KeySwitch scratch 的物理地址，以及 RTL 对 `pfree` 和 `dstore rel=1` 生命周期语义的实现。
 5. 控制逻辑按统一 inflight 计数实现 `psync`，并覆盖 DMA、计算和配置完成事件；联调需确认完成事件与异常上报。

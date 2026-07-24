@@ -79,7 +79,7 @@ std::string generate_hpu_modup_asm(
 
     if (num_q_digit <= 0 || num_p <= 0 || q_offset < 0
         || q_offset + num_q_digit + num_p > hpu::kMaxModContexts) {
-        asm_code << "    // Invalid config: require positive bases within the 128-context Bank 5 capacity\n";
+        asm_code << "    // Invalid config: require positive bases within the 8-bit MOD_ID capacity\n";
         asm_code << "}\n";
         return asm_code.str();
     }

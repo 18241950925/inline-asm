@@ -15,7 +15,7 @@ std::string generate_hpu_moddown_body_asm(
     std::ostringstream asm_code;
 
     if (num_q <= 0 || num_p <= 0 || num_q + num_p > hpu::kMaxModContexts) {
-        asm_code << "        // Invalid config: require positive bases within the 128-context Bank 5 capacity\n";
+        asm_code << "        // Invalid config: require positive bases within the 8-bit MOD_ID capacity\n";
         return asm_code.str();
     }
 
@@ -79,7 +79,7 @@ std::string generate_hpu_moddown_asm(
     asm_code << "void hpu_moddown_Q" << num_q << "_P" << num_p << "(void) {\n";
 
     if (num_q <= 0 || num_p <= 0 || num_q + num_p > hpu::kMaxModContexts) {
-        asm_code << "    // Invalid config: require positive bases within the 128-context Bank 5 capacity\n";
+        asm_code << "    // Invalid config: require positive bases within the 8-bit MOD_ID capacity\n";
         asm_code << "}\n";
         return asm_code.str();
     }

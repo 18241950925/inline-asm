@@ -38,14 +38,22 @@ constexpr std::size_t kModContextWords = 4;
 constexpr U64 kMinPeModulus = 65537;
 constexpr U64 kMaxPeModulus = std::numeric_limits<U32>::max();
 constexpr unsigned kBarrettMuBits = 48;
-constexpr std::size_t kSmallBankLines = 8;
+constexpr std::size_t kRegularBankCount = 5;
+constexpr std::size_t kRegularBankLines = 1024;
+constexpr std::size_t kSmallBankId = 5;
+constexpr std::size_t kSmallBankLines = 32;
+constexpr std::size_t kModTableBaseLine =
+    kRegularBankCount * kRegularBankLines;
 constexpr std::size_t kModContextsPerLine =
     kHpuWordsPerLine / kModContextWords;
-constexpr std::size_t kMaxModContexts =
+constexpr std::size_t kPhysicalModContexts =
     kSmallBankLines * kModContextsPerLine;
+constexpr std::size_t kModIdBits = 8;
+constexpr std::size_t kMaxModContexts =
+    std::min(kPhysicalModContexts, std::size_t{1} << kModIdBits);
 
 static_assert(kNumQ + kNumP <= kMaxModContexts,
-              "Q union P mod contexts exceed the Bank 5 small-bank capacity");
+              "Q union P mod contexts exceed the 8-bit MOD_ID address space");
 
 struct Artifact {
     std::string path;
@@ -840,7 +848,7 @@ void write_hardware_package(const std::filesystem::path& test_data_root,
         throw std::runtime_error("hardware package requires one primitive root per modulus");
     }
     if (moduli.size() > kMaxModContexts) {
-        throw std::runtime_error("mod contexts exceed the 8-line Bank 5 capacity");
+        throw std::runtime_error("mod contexts exceed the 8-bit MOD_ID address space");
     }
     if (kN == 0 || (kN & (kN - 1)) != 0) {
         throw std::runtime_error("hardware stage twiddles require power-of-two N");
@@ -1078,13 +1086,27 @@ void write_hardware_package(const std::filesystem::path& test_data_root,
         << "    \"line_count_must_be_nonzero\": true,\n"
         << "    \"bounds_rule\": \"offset + count <= HPU_MEM_SIZE_LINES\"\n"
         << "  },\n"
+        << "  \"local_sram\": {\n"
+        << "    \"regular_bank_count\": " << kRegularBankCount << ",\n"
+        << "    \"regular_bank_lines\": " << kRegularBankLines << ",\n"
+        << "    \"regular_line_range\": \"0x0000..0x13ff\",\n"
+        << "    \"small_bank_id\": " << kSmallBankId << ",\n"
+        << "    \"small_bank_lines\": " << kSmallBankLines << ",\n"
+        << "    \"small_bank_line_range\": \"0x1400..0x141f\"\n"
+        << "  },\n"
         << "  \"mod_ctx\": {\n"
         << "    \"record_words\": " << kModContextWords << ",\n"
         << "    \"dload_type\": 2,\n"
         << "    \"dload_flag0_small_bank\": 1,\n"
-        << "    \"small_bank_id\": 5,\n"
+        << "    \"small_bank_id\": " << kSmallBankId << ",\n"
         << "    \"small_bank_lines\": " << kSmallBankLines << ",\n"
+        << "    \"mod_table_base_line\": \""
+        << hex32(static_cast<U32>(kModTableBaseLine)) << "\",\n"
         << "    \"contexts_per_line\": " << kModContextsPerLine << ",\n"
+        << "    \"physical_context_capacity\": " << kPhysicalModContexts << ",\n"
+        << "    \"mod_id_bits\": " << kModIdBits << ",\n"
+        << "    \"mod_id_addressable_lines\": "
+        << kMaxModContexts / kModContextsPerLine << ",\n"
         << "    \"max_contexts\": " << kMaxModContexts << ",\n"
         << "    \"q_min\": " << kMinPeModulus << ",\n"
         << "    \"q_max\": " << kMaxPeModulus << ",\n"
@@ -1097,14 +1119,17 @@ void write_hardware_package(const std::filesystem::path& test_data_root,
         << "    \"word_3\": \"reserved[47:16], zero\"\n"
         << "  },\n"
         << "  \"twiddle\": {\n"
-        << "    \"convention\": \"negacyclic pre-twist, bit reversal, radix-2 DIT stages\",\n"
+        << "    \"convention\": \"explicit negacyclic pre/post factors with radix-2 DIT stages\",\n"
+        << "    \"pre_twist_execution\": \"explicit PMUL by psi^i before PNTT stage 0\",\n"
         << "    \"stage_payload_words\": " << kN / 2 << ",\n"
         << "    \"stage_payload_lines\": " << (kN / 2) / kHpuWordsPerLine << ",\n"
         << "    \"stage_payload\": \"N/2 physical values in group-major DIT butterfly order\",\n"
         << "    \"group_rule\": \"for each group, emit step^j for j=0..length/2-1\",\n"
         << "    \"stage_alignment\": \"each stage image starts at a 256-byte line\",\n"
-        << "    \"bit_reversal\": \"performed by HPU internal shuffle path before stage 0\",\n"
-        << "    \"intt_post_factor\": \"N^-1 * psi^-i\"\n"
+        << "    \"stage_pairing\": \"stream_ctrl address generation and PE lane transpose; no standalone bit-reversal command\",\n"
+        << "    \"physical_update\": \"out-of-place per stage; controller commits a new base to the same logical object id\",\n"
+        << "    \"intt_post_factor\": \"N^-1 * psi^-i\",\n"
+        << "    \"intt_post_execution\": \"explicit PMUL after the final PINTT stage\"\n"
         << "  }\n}\n";
     write_text(hardware_root / "abi.json", abi.str());
 
@@ -1132,7 +1157,8 @@ void write_hardware_package(const std::filesystem::path& test_data_root,
                "`images/` contains independently loadable, line-padded forms of the uint64 "
                "mathematical golden. `mod_ctx_map.csv` documents q and Barrett mu records. "
                "Load that image with dload type=2 and flag[0]=1 so the object allocator "
-               "places it in small Bank 5; wait for DMA completion before pmodld. "
+               "places it in 32-line small Bank 5 at MOD_TABLE_BASE_LINE=0x1400; "
+               "wait for DMA completion before pmodld. "
                "`twiddle_map.csv` gives each modulus, direction, phase, stage, line offset, "
                "and line count. Every individual binary has an annotated hex view.\n\n"
                "The physical host-memory ABI in `abi.json` is complete. "
@@ -1481,12 +1507,17 @@ void generate(const std::filesystem::path& output_root,
         "phase,operation,logical_object,domain,basis,status\n"
         "input,dload,ct_a_q,coefficient,Q,READY\n"
         "input,dload,ct_b_q,coefficient,Q,READY\n"
+        "transform,pmul_pre_twist,ct_a_and_ct_b,coefficient,Q,READY_UINT32_LINE_LAYOUT\n"
         "transform,pntt,ct_a_and_ct_b,NTT,Q,READY_UINT32_LINE_LAYOUT\n"
         "tensor,pmul_pmac,t0_t1_t2,NTT,Q,READY\n"
+        "transform,pintt,t0_t1_t2,cyclic_inverse,Q,READY_UINT32_LINE_LAYOUT\n"
+        "transform,pmul_post_untwist_scale,t0_t1_t2,coefficient,Q,READY_UINT32_LINE_LAYOUT\n"
         "relinearize,bconv,t2_digits,coefficient,Q_to_QP,READY\n"
+        "relinearize,pmul_pre_twist,t2_digits,coefficient,QP,READY_UINT32_LINE_LAYOUT\n"
         "relinearize,pntt,t2_digits,NTT,QP,READY_UINT32_LINE_LAYOUT\n"
         "relinearize,pmul_pmac,rlk_and_t2_digits,NTT,QP,READY\n"
         "relinearize,pintt,keyswitch_accum,coefficient,QP,READY_UINT32_LINE_LAYOUT\n"
+        "relinearize,pmul_post_untwist_scale,keyswitch_accum,coefficient,QP,READY_UINT32_LINE_LAYOUT\n"
         "relinearize,moddown,keyswitch_accum,coefficient,QP_to_Q,READY\n"
         "output,dstore,ciphertext_out_q,coefficient,Q,READY\n";
     write_text(output_root / "dma_plan.csv", dma_plan);
@@ -1508,9 +1539,10 @@ void generate(const std::filesystem::path& output_root,
         "The key and ciphertext use zero test noise and a P-divisible functional evaluation "
         "key so failures are bit-exact and easy to localize. They are not security test vectors. "
         "`memory_map.json` points to the generated uint32/256-byte host-memory layout. "
-        "Custom1 line sideband semantics and CSR offsets are frozen; runtime/RTL owners still "
-        "must implement DMA relocation/GPR loading, scratch addresses, and mod_table_base_line "
-        "binding before direct hardware execution.\n";
+        "Custom1 line sideband semantics, CSR offsets, Bank 5/mod-table mapping, and physical "
+        "NTT/INTT out-of-place behavior are frozen; runtime/RTL owners still must implement "
+        "DMA relocation/GPR loading, scratch addresses, and cache/fault/interrupt handling "
+        "before direct hardware execution.\n";
     write_text(output_root / "README.md", readme);
     write_text(output_root / "VALIDATION.txt",
                "PASS\nrelinearized_decryption == tensor_decryption\n"

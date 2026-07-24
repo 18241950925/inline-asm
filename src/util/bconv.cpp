@@ -111,7 +111,7 @@ std::string generate_hpu_bconv_body_asm(
 {
     if (num_q <= 0 || num_p <= 0 || q_offset < 0
         || q_offset + num_q + num_p > hpu::kMaxModContexts) {
-        return "        // Invalid config: require positive bases within the 128-context Bank 5 capacity\n";
+        return "        // Invalid config: require positive bases within the 8-bit MOD_ID capacity\n";
     }
 
     std::vector<int> source_contexts;

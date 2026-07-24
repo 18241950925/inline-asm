@@ -5,9 +5,18 @@
 
 namespace hpu {
 
-inline constexpr int kSmallBankLines = 8;
+inline constexpr int kRegularBankCount = 5;
+inline constexpr int kRegularBankLines = 1024;
+inline constexpr int kSmallBankId = 5;
+inline constexpr int kSmallBankLines = 32;
+inline constexpr int kModTableBaseLine = 0x1400;
 inline constexpr int kModContextsPerLine = 16;
-inline constexpr int kMaxModContexts = kSmallBankLines * kModContextsPerLine;
+inline constexpr int kPhysicalModContexts = kSmallBankLines * kModContextsPerLine;
+inline constexpr int kModIdBits = 8;
+inline constexpr int kMaxModContexts =
+    kPhysicalModContexts < (1 << kModIdBits)
+        ? kPhysicalModContexts
+        : (1 << kModIdBits);
 
 inline std::string pobj(int id) {
     return "p" + std::to_string(id);
@@ -91,7 +100,7 @@ inline std::string pmac_imm(int pdst, int psrc1, int cimm8) {
 
 // --- STG 格式：stage / transform 执行类 ---
 // 语义：第一个对象为逻辑数据对象，第二个对象为 twiddle 对象。
-// 控制器可在保持逻辑对象号不变的情况下重分配数据对象的物理 base。
+// 控制器在保持逻辑对象号不变的情况下执行 out-of-place 并提交新的物理 base。
 inline std::string pntt(int pdata, int ptwiddle, int stage, int mode = 0, int flag = 0) {
     std::ostringstream ss;
     ss << "        \"pntt " << pobj(pdata) << ", " << pobj(ptwiddle) << ", " << stage

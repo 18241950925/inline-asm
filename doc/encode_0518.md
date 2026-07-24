@@ -144,7 +144,7 @@ outputs/<case>/
 - `src/main.cpp`：HPU 指令流生成参数。
 - `test/reference/main.cpp`：FHE reference 和测试向量参数。
 
-`outputs/*/test_data/params.json` 是生成结果，不是输入配置，重新生成时会覆盖。修改 `N/Q/P/dnum` 时需同步修改上述两处，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 128`、所有 RNS 模数不超过 32 bit 等当前实现约束。8 个逻辑对象槽位与 8-bit `MOD_ID` 编码空间是独立资源；Bank 5 当前只有 8 line，每 line 容纳 16 个模上下文，所以物理上限是 128。默认完整乘法参数为 `N=4096, Q=4, P=3, dnum=2`。
+`outputs/*/test_data/params.json` 是生成结果，不是输入配置，重新生成时会覆盖。修改 `N/Q/P/dnum` 时需同步修改上述两处，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 256`、所有 RNS 模数不超过 32 bit 等当前实现约束。8 个逻辑对象槽位与 8-bit `MOD_ID` 编码空间是独立资源；Bank 5 为 32 line、固定基址 `0x1400`，物理可放 512 个 context，但 `MOD_ID` 最多寻址 256 个。默认完整乘法参数为 `N=4096, Q=4, P=3, dnum=2`。
 
 ## 7. 当前交付边界
 

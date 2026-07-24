@@ -33,8 +33,14 @@ std::string generate_hpu_ntt_body_asm(
 
     asm_code << "        // dload all mod contexts (placeholder)\n";
     // 假设调用方已经加载过密文模数
-    // obj_poly 是稳定的逻辑对象；控制器可为每个 stage 重分配物理 base。
-    // 软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
+    // Negacyclic NTT = pointwise pre-twist followed by a cyclic NTT.
+    asm_code << "\n        // Negacyclic pre-twist: explicit PMUL by psi^i\n";
+    asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
+    asm_code << hpu::pmul(data_obj, data_obj, twiddle_obj);
+    asm_code << hpu::pfree(twiddle_obj);
+
+    // obj_poly 是稳定的逻辑对象；控制器为每个 stage 执行物理 out-of-place，
+    // 完成后提交新 base。stage 配对由 stream_ctrl 地址与 lane 调度完成。
     for (int stage = 0; stage < logN; ++stage) {
         asm_code << "\n        // ==========================================\n";
         asm_code << "        // Stage " << stage << " (Stage-level pntt)\n";
@@ -72,8 +78,8 @@ std::string generate_hpu_intt_body_asm(
     asm_code << "        // dload all mod contexts (placeholder)\n";
     // 假设调用方已经加载过密文模数
 
-    // obj_poly 是稳定的逻辑对象；控制器可为每个 stage 重分配物理 base。
-    // 软件按 stage 显式推进，stage 内 twiddle/重排由硬件处理
+    // obj_poly 是稳定的逻辑对象；控制器为每个 stage 执行物理 out-of-place，
+    // 完成后提交新 base。stage 配对由 stream_ctrl 地址与 lane 调度完成。
     for (int stage = 0; stage < logN; ++stage) {
         asm_code << "\n        // ==========================================\n";
         asm_code << "        // Stage " << stage << " (Stage-level pintt)\n";
@@ -82,6 +88,12 @@ std::string generate_hpu_intt_body_asm(
         asm_code << hpu::pintt(data_obj, twiddle_obj, stage, 0);
         asm_code << hpu::pfree(twiddle_obj);
     }
+
+    // The PE butterfly does not implicitly normalize or apply the inverse twist.
+    asm_code << "\n        // INTT normalize and inverse-twist: explicit PMUL by N^-1 * psi^-i\n";
+    asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
+    asm_code << hpu::pmul(data_obj, data_obj, twiddle_obj);
+    asm_code << hpu::pfree(twiddle_obj);
 
     if (append_psync) {
         asm_code << hpu::psync();

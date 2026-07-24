@@ -17,7 +17,8 @@
 - 代码中 `x0` / `x_offset` / `x_c0` / `x_ct1_up` / `x_ct1_ntt` / `x_evk` / `x_out` / `x_tmp_c0` 等仅是占位地址寄存器名，测试时需用实际的 DMA/HBM 地址替代。
 - 模表 dload 后必须先执行 `psync`，再执行 `pmodld MOD_ID`。`pmodld` 不携带 `pobj`，而是按 MOD_ID 从 `mod_table_base_line` 选择上下文；模表物理顺序必须与 MOD_ID 一致。
 - `dload` 使目标逻辑对象进入 live 状态。生成器在只读输入、常量、twiddle和模表对象最后一次使用后发出 `pfree`；输出使用 `dstore rel=1` 时由 DMA 完成后释放，不再重复发出 `pfree`。
-- 当前 `SMALL_BANK_LINES=8`，每 line 容纳 16 个 context，因此模表物理上限是 128 个上下文。
+- 当前 `SMALL_BANK_LINES=32`、`MOD_TABLE_BASE_LINE=0x1400`。每 line 容纳 16 个 context，物理容量为 512；受 8-bit `MOD_ID` 限制，软件最多生成 256 个 context。
+- NTT 在 stage 0 前必须加载 `pre_twist` 并显式 PMUL；INTT 在最终 stage 后必须加载 `post_untwist_scale` 并显式 PMUL。
 - 数学 golden 使用 little-endian `uint64`；`dload` 应使用 `test_data/hardware/` 下 little-endian `uint32`、按 256B line 补齐的独立镜像或完整 `hpu_mem_image.u32.bin`。
 - 每个 NTT/INTT stage twiddle 镜像固定包含 `N/2` 个 `uint32`，按 group-major butterfly 顺序排列；默认 `N=4096` 时为 32 line。
 

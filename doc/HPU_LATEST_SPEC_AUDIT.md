@@ -6,8 +6,8 @@
 
 本审计以以下飞书文档为依据：
 
-1. [HPU 控制逻辑设计文档](https://icnj64z5e8zz.feishu.cn/wiki/KOlSwfEEtiMuqvkTppPcyJElnyf)，v0.4，2026-05-31。按项目负责人确认，作为当前 26-bit 命令、对象状态、allocator、small Bank 5、`pmodld`、`pfree` 和 `psync` 的首要基线。
-2. [HPU 集成与编程手册](https://icnj64z5e8zz.feishu.cn/wiki/NZEgwsvshiQ6Twkrxvtck3UGnXg)，V0.2，2026-07-10。用于跨模块接口、CSR、SRAM、DMA 和软件流程；与控制逻辑文档冲突时不覆盖上述控制逻辑口径。
+1. [HPU 控制逻辑设计文档](https://icnj64z5e8zz.feishu.cn/wiki/KOlSwfEEtiMuqvkTppPcyJElnyf)，v0.4，2026-05-31。作为当前 26-bit 命令、对象状态、`pmodld`、`pfree` 和 `psync` 的编码/控制基线。
+2. [HPU 集成与编程手册](https://icnj64z5e8zz.feishu.cn/wiki/NZEgwsvshiQ6Twkrxvtck3UGnXg)，V0.2，2026-07-10。用于跨模块接口、CSR、SRAM、DMA 和软件流程；对 Bank 深度、固定地址和物理 NTT 策略等后更新字段优先于 5 月控制文档。
 3. [RISC-V核内接口设计](https://icnj64z5e8zz.feishu.cn/wiki/QE8MwYGIciNwoYkjomCcZbnmnOh)。核内 custom0/custom1 发射路径基线；其中 custom1 章节与集成手册存在冲突，见第 4 节。
 4. [HPU_PE_反串讲](https://icnj64z5e8zz.feishu.cn/wiki/T7pTwV4eiiJbXHkTkrAcgDzxn0g)，v0.1，2026-06-22。PE 位宽、Barrett、twiddle 和 NTT/INTT 数据通路验证基线。
 5. [HPU](https://icnj64z5e8zz.feishu.cn/wiki/MZkHwbivGiOs7ekMGb0cMSk5nTY)。知识库根文档，包含新旧章节，只用于定位历史约定，不作为单一冻结版本。
@@ -51,9 +51,9 @@ cmd26[24:0] = control payload
 1. 汇编语法改为 `pmodld mod_id`，范围 0..255；旧 `psrc/idx1/cfg15` 语法作为负例拒绝。
 2. 原始 32-bit 指令的 `MOD_ID` 编码在 `[21:14]`，经过 custom0 precode 后对应 `cmd26[14:7]`。
 3. 所有算子生成器均改为 `pmodld(i)`，不再把 `p4` 编入 `pmodld`。
-4. `MOD_ID` 编码仍为 8-bit；根据 `SMALL_BANK_LINES=8`、每 line 16 context，生成器物理上限为 128。对象槽位仍独立保持 8 个。
+4. `MOD_ID` 编码仍为 8-bit；Bank 5 为 32 line、物理可放 512 个 context，但生成器受编码限制最多生成 256 个。对象槽位仍独立保持 8 个。
 
-`dload type=2, flag[0]=1` 现在显式请求 allocator 将模表对象分配到 small Bank 5；生成器在首条 `pmodld` 前插入 `psync`。模表对象是具有 `ALLOC/V/busy/base/len` 的真实逻辑对象，不再描述为“仅 DMA 句柄”。剩余接口项是 `mod_table_base_line` 与该对象实际 `base` 的绑定。
+`dload type=2, flag[0]=1` 现在显式请求 allocator 将模表对象分配到 small Bank 5；生成器在首条 `pmodld` 前插入 `psync`。模表对象是具有 `ALLOC/V/busy/base/len` 的真实逻辑对象，不再描述为“仅 DMA 句柄”。`MOD_TABLE_BASE_LINE` 已按最新集成手册冻结为 `0x1400`。
 
 ### A3. `pfree` 对象字段和 `psync` 载荷（已修复，2026-07-23）
 
@@ -82,7 +82,7 @@ cmd26[24:0] = control payload
 依次写 `step^j`，相同值在不同 group 中物理重复。每个 stage 固定为 `N/2`
 个 `uint32`、`N/128` line；默认 `N=4096` 为 2048 words/32 lines。
 `twiddle_map.csv` 新增 `group_count` 和 `twiddles_per_group`，delivery 门禁逐一检查
-NTT/INTT 的 12 个 stage。negacyclic pre/post factor 的执行方式仍属于另一个独立问题。
+NTT/INTT 的 12 个 stage。negacyclic pre/post factor 已按 A13 显式执行。
 
 ### A6. HPU_MEM CSR 数字地址（已修复，2026-07-24）
 
@@ -121,7 +121,9 @@ q 范围、`mu_bits=48` 和 `reserved_bits=48`。
 
 ### A8. 参数检查没有覆盖本地 SRAM/PE 能力（P1）
 
-本地证据：NTT 和完整乘法仍主要检查 N 为 2 的幂。context 数已按 Bank 5 的 8 line 容量限制为 128，但尚未统一检查本地 SRAM 峰值驻留等目标能力。
+本地证据：NTT 和完整乘法仍主要检查 N 为 2 的幂。context 数已按
+8-bit `MOD_ID` 限制为 256，但尚未统一检查普通 Bank 的半 bank/整 bank
+峰值驻留等目标能力。
 
 文档来源：《HPU 集成与编程手册》3.1.2、3.4；《HPU 控制逻辑设计文档》allocator 章节。
 
@@ -143,13 +145,48 @@ q 范围、`mu_bits=48` 和 `reserved_bits=48`。
 
 修改建议：提供最小 runtime/driver 层，完成 HPU_MEM ownership、提交前 clean、读回前 invalidate、`HPU_STATUS/FAULT_STATUS` 检查、W1C fault、`irq_sync_done` 和 DMA 错误处理。
 
-### A11. NTT/INTT 的“原地”描述过强（已修复，2026-07-23）
+### A11. NTT/INTT 物理 in-place/out-of-place（已冻结，2026-07-24）
 
 本地证据：项目手册和 `src/util/ntt.cpp` 声明 NTT/INTT 原地执行。
 
-文档来源：《HPU 控制逻辑设计文档》描述 NTT/INTT out-of-place 分配并在完成后提交新 base；《HPU_PE_反串讲》13.6 又记录设计版本存在 in-place/out-of-place 差异。
+文档来源：较新的《HPU 集成与编程手册》3.4.6 明确 allocator 为
+NTT/INTT out-of-place 提供 base 管理；5 月《HPU 控制逻辑设计文档》也描述
+完成后提交新 base。较旧《HPU_PE_反串讲》13.6 仅记录当时尚未确认的疑问。
 
-当前软件 ABI 已统一表述为“同一 logical object id，物理 base 可由 controller 在 stage 完成后重分配并提交”，不再承诺物理原地。PE 文档中的版本差异仍需由 RTL release note 记录，但不会改变软件对象号。
+当前软件 ABI 冻结为“同一 logical object id、每 stage 物理 out-of-place、
+完成后提交新 base 并释放旧 base”，delivery 门禁检查该 machine-readable
+字段。PE 文档中的旧疑问不再作为备选 ABI。
+
+### A12. Bank 5 深度与模表基址（已修复，2026-07-24）
+
+旧项目和 5 月《HPU 控制逻辑设计文档》allocator 章节使用
+`SMALL_BANK_LINES=8`，因此软件将 context 上限错误收紧为 128。
+
+较新的《HPU 集成与编程手册》3.1.2、3.4.1、3.4.2.1 和 3.4.3.4，以及
+2026-07-15 更新的《SRAM逻辑设计》均给出：Bank 0-4 各 1024 line，Bank 5
+为 32 line，固定有效范围 `0x1400..0x141F`，默认保留为模上下文表。
+
+当前目标常量和 `abi.json` 已改为 32-line Bank 5、
+`MOD_TABLE_BASE_LINE=0x1400`、物理容量 512 context。由于 PMODLD 的
+`MOD_ID` 仍是 8 bit，软件寻址上限取 `min(512, 2^8)=256`，对应前 16 line；
+不能因 SRAM 剩余空间而越过指令编码范围。
+
+### A13. negacyclic pre/post factor 被错误假设为硬件隐式行为（已修复，2026-07-24）
+
+原 `abi.json` 声称 stage 0 前由内部 shuffle 完成 bit reversal，编程手册又要求
+最后一个 PINTT stage 隐式融合 `N^-1 * psi^-i`，但生成的 pre/post 镜像没有
+任何指令消费。
+
+文档来源：《HPU 集成与编程手册》3.5.2 将 PNTT/PINTT 定义为使用 twiddle
+的标准 butterfly，3.5.3 只定义 stage 配对的 lane transpose；没有定义
+negacyclic twist 或 INTT 归一化融合。《HPU_PE_反串讲》13.2 也要求一条指令
+只执行一个 stage。
+
+当前 NTT 在 stage 0 前显式生成 `dload pre_twist -> pmul -> pfree`；INTT 在
+最终 stage 后显式生成
+`dload post_untwist_scale -> pmul -> pfree`。软件 reference 的 bit-reversal
+循环只作为 DIT 数学实现细节；硬件 stage 配对由 stream_ctrl 地址生成和 PE
+lane transpose 实现，不再虚构独立隐式 shuffle。
 
 ## 4. 飞书文档历史矛盾与当前冻结结果
 
@@ -160,12 +197,12 @@ q 范围、`mu_bits=48` 和 `reserved_bits=48`。
 | C1 | `psync` 是否等待 custom1/DMA | 按当前首要基线《HPU 控制逻辑设计文档》，统一 inflight 完成包含 `extmem_done_pulse` | 已按包含 DMA 完成实现；模表 dload 后显式插入 `psync` |
 | C2 | custom1 是 rs1/rs2 line sideband，还是 VA 经 DTLB 后形成 `{paddr,len,dir,flags}` descriptor | 较新的《HPU 集成与编程手册》5.2.2/9.1 与较旧《RISC-V核内接口设计》custom1 HpuUnit 章节相反 | 以较新的集成手册为准：`GPR[rs1]=line_offset`、`GPR[rs2]=line_count`，单位 256B；旧 DTLB descriptor 方案不再是项目 ABI |
 | C3 | 模上下文记录是 `mu64+reserved32` 还是 `mu48+reserved48` | 较旧《HPU 控制逻辑设计文档》写 `{reserved[31:0],mu[63:0],q[31:0]}`；较新的《HPU 集成与编程手册》3.5.4 写 `{reserved[47:0],mu[47:0],q[31:0]}`，PE 端口也是 48-bit mu | 以较新的集成手册为准，项目已统一为 `q32+mu48+reserved48` |
-| C4 | NTT/INTT 物理 in-place 或 out-of-place | 《HPU 控制逻辑设计文档》为 out-of-place；《HPU_PE_反串讲》13.6 记录“设计改了 in-place / 分 stage 混合”的未决说明 | 软件只承诺 logical object id；RTL release note 给出物理策略 |
+| C4 | NTT/INTT 物理 in-place 或 out-of-place | 较新的《HPU 集成与编程手册》3.4.6 与控制文档均为 out-of-place；较旧《HPU_PE_反串讲》13.6 只是未决记录 | 以较新的集成手册为准：每 stage 物理 out-of-place，完成后向同一 logical object id 提交新 base |
 | C5 | 32-bit 原始指令与 26-bit 内部命令映射 | 《HPU 控制逻辑设计文档》v0.4 规定 `cmd[25]=cmd_kind`；《RISC-V核内接口设计》只确认核侧可提取 custom0 的 `inst[31:7]`，其中后续 custom1 descriptor 方案与控制逻辑的统一命令入口不同 | 按项目负责人最新确认，以《HPU 控制逻辑设计文档》为准：kind 位于最高位，custom1 由 precode 重排语义字段并携带独立 sideband |
 
 ## 5. 建议实施顺序
 
-1. 冻结仍未解决的 C4，并形成带版本号的 machine-readable target ABI；C1/C2/C3/C5 已冻结。
+1. C1-C5 均已冻结，并写入 machine-readable target ABI；持续回归其 delivery 检查。
 2. A1/A2/A3 已完成，持续用 RV smoke 的 32/26-bit 期望表回归。
 3. 完成 A4、A10：生成真实 DMA relocation/GPR 装载、CSR runtime 和可运行 host harness；A6 的数字 CSR 表已完成。
 4. 完成 A8-A9：补全目标参数校验和 PE bit-exact UT；A5/A7 已完成。
