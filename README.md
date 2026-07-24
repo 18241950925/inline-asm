@@ -185,11 +185,11 @@ ctest --test-dir build --output-on-failure
 - `cmult` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32/.cmd26` 生成链路；其中 `ciphertext_multiply` 要求 `num_q % dnum == 0` 且 `num_q + num_p <= 128`
 - `ciphertext_multiply/test_data` 已由软件 reference 自动生成；二进制格式、shape 和校验值见其中的 `params.json` 与 `artifact_manifest.csv`
 - 顶层 `.bin` 是 `uint64` 数学 golden；真正面向 HPU 加载的是 `test_data/hardware/` 下按 256B line 补齐的 `.u32.bin`
-- `hardware/line_map.csv` 给出每个对象的 byte address、line offset 和 line count；`hpu_mem_config.json` 给出 HPU_MEM window 值和语义 CSR 编程顺序
+- `hardware/line_map.csv` 给出每个对象的 byte address、line offset 和 line count；custom1 固定使用 `GPR[rs1]=line_offset`、`GPR[rs2]=line_count`（256B line 单位），`hpu_mem_config.json` 给出 HPU_MEM window 值和 `0x00..0x18` CSR 编程顺序
 - 当前完整乘法和大部分算子的 DMA 地址仍使用 `x0/x0` 占位；runtime 把 `line_map.csv` 的 line offset/count 绑定到 `rs1/rs2` 前，`.inst32` 是计算顺序流而不是可直接执行程序
 
 ---
 
 ## 6. 当前交付边界
 
-软件侧已完成指令生成、编码、完整密文乘法/重线性化 reference golden、独立 `uint32` 硬件镜像、q/Barrett `mod_ctx`、逐 stage twiddle、256B line 映射、HPU_MEM window 配置和 RV 接口冒烟流。`psync` 已按控制逻辑的统一 inflight 语义处理；硬件直接执行仍依赖 CSR 数字偏移、指令 `rs1/rs2` sideband 绑定、scratch 布局和 `mod_table_base_line` 绑定。详细签字项见 `doc/HPU_TEST_DELIVERY.md`。
+软件侧已完成指令生成、编码、完整密文乘法/重线性化 reference golden、独立 `uint32` 硬件镜像、`q32+mu48+reserved48` 模上下文、每 stage 固定 `N/2` 个物理 twiddle、256B line 映射、HPU_MEM CSR 配置和 RV 接口冒烟流。custom1 line sideband 与 `0x00..0x18` CSR 偏移已按最新集成手册冻结，`psync` 已按控制逻辑的统一 inflight 语义处理；硬件直接执行仍依赖 DMA relocation/GPR 装载、scratch 布局和 `mod_table_base_line` 绑定。详细签字项见 `doc/HPU_TEST_DELIVERY.md`。

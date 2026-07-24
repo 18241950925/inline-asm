@@ -151,7 +151,7 @@ outputs/<case>/
 软件侧已经完成指令生成、`.inst32`/`.cmd26` 编码、完整密文乘法与重线性化 reference、算子 UT 数据和 RV 接口冒烟流。以下信息仍需硬件侧确认后才能把当前计算顺序流变成可直接执行程序：
 
 1. `dload/dstore` 的 DDR 地址寄存器和偏移 ABI；当前完整乘法中仍使用 `x0/x0` 占位。
-2. HPU_MEM CSR 数字偏移、`line_map.csv` 到指令 `rs1/rs2` 的 runtime 绑定，以及 RTL 对 V1 `mod_ctx`/DIT twiddle ABI 的签字。
+2. runtime 按已冻结的 `GPR[rs1]=line_offset`、`GPR[rs2]=line_count`（256B line 单位）完成 `line_map.csv` 到每条 DMA 指令的重定位，以及 RTL 对 `q32+mu48+reserved48` mod context 和每 stage `N/2` 个 group-major DIT twiddle 的签字。
 3. HPU SRAM/scratch 容量、对象槽位驻留规则，以及 `pfree`/`dstore rel=1` 的释放完成时机。
 4. runtime 如何把生成的 HPU_MEM line offset/count 写入 `dload/dstore` 使用的寄存器，以及异常上报规则。
 

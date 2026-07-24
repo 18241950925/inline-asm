@@ -7,7 +7,7 @@
 - `src/main.cpp` 通过 `inline_asm_codegen` 生成下述算子的 ASM，仍是 HPU 指令流入口。
 - `test/reference/main.cpp` 通过 `hpu_reference_vectors` 生成对应输入、常量、期望输出和人工可读 `.hex.txt`。
 - 完整密文乘法的 HPU_MEM 镜像入口见 `outputs/ciphertext_multiply/test_data/memory_map.json`，逐对象 256B line offset/count 见 `hardware/line_map.csv`，阶段搬运顺序见同目录 `dma_plan.csv`。
-- `hardware/hpu_mem_config.json` 已给出 base/size 和语义 CSR 编程顺序；CSR 数字偏移及 `line_map.csv` 到指令 `rs1/rs2` 的寄存器绑定仍需 runtime/RTL 确认。代码中的 `x0` 和符号地址寄存器必须据此替换或重定位。
+- `hardware/hpu_mem_config.json` 已给出 base/size、冻结的 `0x00..0x18` CSR 偏移和编程顺序。custom1 固定解释为 `GPR[rs1]=HPU_MEM line offset`、`GPR[rs2]=line count`，单位均为 256B；runtime 仍需用 `line_map.csv` 的具体值替换或重定位代码中的 `x0` 和符号寄存器。
 
 ## 通用约定
 
@@ -19,6 +19,7 @@
 - `dload` 使目标逻辑对象进入 live 状态。生成器在只读输入、常量、twiddle和模表对象最后一次使用后发出 `pfree`；输出使用 `dstore rel=1` 时由 DMA 完成后释放，不再重复发出 `pfree`。
 - 当前 `SMALL_BANK_LINES=8`，每 line 容纳 16 个 context，因此模表物理上限是 128 个上下文。
 - 数学 golden 使用 little-endian `uint64`；`dload` 应使用 `test_data/hardware/` 下 little-endian `uint32`、按 256B line 补齐的独立镜像或完整 `hpu_mem_image.u32.bin`。
+- 每个 NTT/INTT stage twiddle 镜像固定包含 `N/2` 个 `uint32`，按 group-major butterfly 顺序排列；默认 `N=4096` 时为 32 line。
 
 ---
 

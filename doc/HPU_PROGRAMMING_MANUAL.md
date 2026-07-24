@@ -76,9 +76,15 @@ HPU 软件使用 `p0` 到 `p7` 表示 8 个 3-bit 对象槽位。对象槽位不
 `padd`、`psub`、`pmul`、`pmac`、`pntt` 和 `pintt` 均使用当前活动模上下文。上下文至少包含：
 
 ```text
-q  = 32-bit modulus
-mu = floor(2^64 / q), supplied to Barrett reduction
+q  = 32-bit modulus, 65537 <= q <= 2^32 - 1
+mu = floor(2^64 / q), 48-bit Barrett reciprocal
 ```
+
+每条上下文是一个 little-endian 128-bit record，从最低位到最高位为
+`{q[31:0], mu[47:0], reserved[47:0]}`。按 `uint32` word 查看时依次为：
+`word0=q`、`word1=mu[31:0]`、`word2[15:0]=mu[47:32]`，
+`word2[31:16]` 与 `word3` 全部为 0。生成器会同时检查 q 范围和
+`mu >> 48 == 0`。
 
 模上下文对象通过 `dload type=2, flag[0]=1` 请求 small-bank 分配，allocator 将其物理 base 放入 `SMALL_BANK_ID=5`。当前 Bank 5 为 8 line，每 line 可放 16 个 128-bit context，因此物理模表最多容纳 128 个上下文。模表 DMA 完成后，`pmodld MOD_ID` 从该表选择当前上下文。执行计算指令前，软件必须先激活与当前 RNS limb 对应的上下文；切换 Q/P 基时必须重新执行 `pmodld`。
 
@@ -139,7 +145,10 @@ custom0 的 payload 与原始指令去掉低 7-bit opcode 后完全相同：
 custom0: cmd26 = {1'b0, inst[31:7]}
 ```
 
-custom1 的 `rs1/rs2` 用于核侧形成 `mem_line_offset/mem_len_lines` sideband，不进入命令本体。precode 从原始 DMA 指令提取语义字段并重排为：
+custom1 的 `rs1/rs2` 用于核侧形成 `mem_line_offset/mem_len_lines` sideband，不进入命令本体。其语义已经冻结为
+`mem_line_offset=GPR[rs1]`、`mem_len_lines=GPR[rs2]`，二者均以 256B HPU line
+为单位；`mem_len_lines` 必须非零且 `offset+count` 不得超过
+`HPU_MEM_SIZE_LINES`。旧《RISC-V核内接口设计》中的 DTLB descriptor 方案不再作为本项目 ABI。precode 从原始 DMA 指令提取语义字段并重排为：
 
 ```text
 cmd26[25]    = 1
@@ -430,6 +439,13 @@ pntt  p0, p3, 0, 0, 0
 pfree p3
 ```
 
+硬件镜像为每个 stage 固定生成 `N/2` 个 little-endian `uint32`
+twiddle，即 `N/128` 条 256B line。当前物理顺序是 group-major DIT：
+对每个长度为 `length=2^(stage+1)` 的 butterfly group，依次写出
+`step^j mod q`（`j=0..length/2-1`），再写下一个 group；因此不同 group
+需要的相同 twiddle 也会在镜像中重复出现。当前 `N=4096` 时，每个 stage
+均为 2048 words、32 line，而不是仅保存一份可复用的唯一幂表。
+
 ### 5.2 PINTT - 逆向 NTT stage
 
 **语法**
@@ -452,7 +468,7 @@ pintt pdata, ptwiddle, stage, 0, 0
 pfree ptwiddle
 ```
 
-软件 reference 的数学行为是：先对输入执行 bit reversal，再执行 radix-2 DIT 逆循环 NTT，随后逐系数乘 `N^-1 mod q` 完成归一化，最后逐系数乘 `psi^-i mod q` 完成负循环逆 twist。硬件数据包为每个 RNS 模数生成逐 stage 的逆 DIT twiddle，并额外生成 `post_untwist_scale.u32.bin`；其中第 `i` 项为 `N^-1 * psi^-i mod q`。逐 stage twiddle 和 post factor 均使用 little-endian `uint32` canonical residue，每个镜像从新的 256B HPU line 开始，尾部补零。
+软件 reference 的数学行为是：先对输入执行 bit reversal，再执行 radix-2 DIT 逆循环 NTT，随后逐系数乘 `N^-1 mod q` 完成归一化，最后逐系数乘 `psi^-i mod q` 完成负循环逆 twist。硬件数据包为每个 RNS 模数生成逐 stage 的逆 DIT twiddle，并额外生成 `post_untwist_scale.u32.bin`；其中第 `i` 项为 `N^-1 * psi^-i mod q`。每个 INTT stage 同样按上一节的 group-major 顺序展开为固定 `N/2` 个物理值；逐 stage twiddle 和 post factor 均使用 little-endian `uint32` canonical residue，每个镜像从新的 256B HPU line 开始，尾部补零。
 
 当前指令流没有单独发出 bit reversal、归一化或逆 twist 指令，且生成的 `dload x0, x0, ...` 地址仍是占位值。`abi.json` 当前约定 bit reversal 由 HPU 在 stage 0 前的内部 shuffle 完成；runtime 还需按照 `twiddle_map.csv` 将每个 stage 的 `dload` 绑定到对应 twiddle line，并由硬件在最后 stage 融合 `post_untwist_scale`，或在后续流程中显式完成同等的逐系数乘法。
 
@@ -573,7 +589,11 @@ on completion:
 
 `small_bank=0` 使用普通 bank 分配；`small_bank=1` 设置 `flag[0]`，请求把长度不超过 8 line 的小对象分配到 Bank 5。模上下文生成器固定使用 `type=2, small_bank=1`。
 
-`rs1` 和 `rs2` 是 5-bit RISC-V 寄存器编号。当前项目期望 runtime 将 HPU_MEM line offset/count 或目标平台定义的 DMA 参数放入对应寄存器；生成的完整算子流仍大量使用 `x0,x0` 占位，因此这些 `.inst32` 目前只表达计算顺序，不能直接作为有效 DMA 请求执行。
+`rs1` 和 `rs2` 是 5-bit RISC-V 寄存器编号。执行时固定解释为
+`GPR[rs1]=HPU_MEM line offset`、`GPR[rs2]=line count`，单位均为 256B；
+不存在另一套 DTLB descriptor 解释。生成的完整算子流仍大量使用
+`x0,x0` 占位，因此 relocation/runtime 尚需把 `line_map.csv` 中的值装入
+非零 GPR，之后这些 `.inst32` 才能作为有效 DMA 请求执行。
 
 **示例**
 
@@ -611,6 +631,25 @@ on completion:
 ```asm
 dstore x10, x11, p2, 1    # 0x00B5542B
 ```
+
+### 7.3 HPU_MEM CSR
+
+HPU_MEM window 使用以下已冻结的 CSR 偏移：
+
+| 偏移 | 名称 | 访问 | 有效字段 |
+| --- | --- | --- | --- |
+| `0x00` | `HPU_MEM_BASE_LO` | RW | `base[31:0]` |
+| `0x04` | `HPU_MEM_BASE_HI` | RW | `base[39:32]` |
+| `0x08` | `HPU_MEM_SIZE_LINES_LO` | RW | `size_lines[31:0]` |
+| `0x0C` | `HPU_MEM_SIZE_LINES_HI` | RW | `size_lines[32]` |
+| `0x10` | `HPU_MEM_COMMIT` | W1 | `commit[0]` |
+| `0x14` | `HPU_STATUS` | RO | `window_valid[0]`、`hpu_busy[1]`、`fault_valid[2]` |
+| `0x18` | `HPU_FAULT_STATUS` | RO/W1C | `fault_valid[0]`、`is_load[1]`、`obj_id[6:4]` |
+
+软件先写 base low/high 和 size low/high，再向 `HPU_MEM_COMMIT` 写 1，最后读
+`HPU_STATUS`，要求 `window_valid=1` 且 `fault_valid=0`。故障处理完成后向
+`HPU_FAULT_STATUS.fault_valid` 写 1 清除。生成文件
+`hardware/hpu_mem_config.json` 给出当前镜像的具体值和同一编程顺序。
 
 ## 8. 推荐编程序列
 
@@ -736,9 +775,10 @@ ctest --test-dir build --output-on-failure
 
 以下内容不由当前编码器单独保证：
 
-1. custom1 中 `rs1/rs2` 的最终 line sideband 或 DTLB descriptor 语义。
+1. relocation/runtime 是否把每条 DMA 的实际 line offset/count 装入 `rs1/rs2`。
 2. `mod_table_base_line` 如何绑定到 small-bank 模表对象的实际 `base`。
-3. NTT/INTT 的 twiddle lane 布局及各 stage 物理 base 提交细节。
-4. CSR、cache maintenance、中断和 fault 的 runtime 实现。
+3. NTT/INTT 各 stage 物理 base 的提交，以及 RTL 是否按已生成的 group-major 次序消费。
+4. cache maintenance、中断和 fault 的 runtime 实现。
 
-在上述接口冻结前，本手册可作为当前软件编码器和指令生成器的规范，但不能代替 SoC/RTL 接口控制文档。
+custom1 line sideband、HPU_MEM CSR、stage twiddle 数量/顺序和 mod context
+位布局已经冻结；上述列表是尚未实现的 runtime/RTL 行为，不是这些 ABI 的备选解释。

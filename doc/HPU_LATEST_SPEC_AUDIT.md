@@ -1,6 +1,6 @@
 # HPU 最新文档符合性审计
 
-审计日期：2026-07-23
+审计日期：2026-07-24
 
 ## 1. 审计基线
 
@@ -71,21 +71,23 @@ cmd26[24:0] = control payload
 2. 输出可直接运行的 host harness：装载寄存器、发射 `.inst32`、等待完成、检查 fault。
 3. 将“所有 DMA 使用 x0/x0”改成 delivery 失败条件；仅显式 `--symbolic-dma` 模式允许占位符。
 
-### A5. stage twiddle 物理布局与 PE 文档不一致（P0）
+### A5. stage twiddle 物理布局与 PE 文档不一致（已修复，2026-07-24）
 
-本地证据：`test/reference/main.cpp` 为 stage `s` 只生成 `2^s` 个唯一 twiddle，并声明由 butterfly group 复用。当前 NTT 指令流也没有消费单独生成的 `pre_twist` 和 `post_untwist_scale` 对象。
+原实现为 stage `s` 只生成 `2^s` 个唯一 twiddle，并声明由 butterfly group
+复用，不符合 PE 的物理搬运数量。
 
 文档来源：《HPU_PE_反串讲》13.2、13.3：每个 stage 的物理 twiddle 对象为 `N/2` 个 32-bit 元素；以 `N=65536` 为例正好是 512 line。每个 stage 前独立 DLoad。
 
-影响：数学 reference 的 twiddle 正确，不代表 DMA 后的 PE 物理 lane 顺序正确。对当前 `N=4096`，文档口径应为每 stage 2048 words/32 lines，而项目 stage 0..10 均更短。
+当前生成器已按 group-major DIT butterfly 顺序展开每个 stage：每个 group
+依次写 `step^j`，相同值在不同 group 中物理重复。每个 stage 固定为 `N/2`
+个 `uint32`、`N/128` line；默认 `N=4096` 为 2048 words/32 lines。
+`twiddle_map.csv` 新增 `group_count` 和 `twiddles_per_group`，delivery 门禁逐一检查
+NTT/INTT 的 12 个 stage。negacyclic pre/post factor 的执行方式仍属于另一个独立问题。
 
-现有 `STAGE_TWIDDLE_LAYOUT=PASS` 只检查当前项目的压缩布局和 manifest 自洽，不能作为满足上述 PE 物理布局的证明。
+### A6. HPU_MEM CSR 数字地址（已修复，2026-07-24）
 
-修改建议：由 PE/stream_ctrl 负责人给出每个 stage 的 lane 读取顺序，按该顺序展开为 `N/2` 元素；每个 stage 固定 `N/128` line。另需明确 negacyclic pre/post factor 是由硬件隐式完成，还是由软件额外发出 PMUL/NTT 阶段。
-
-### A6. HPU_MEM CSR 已有数字地址，但项目仍标记“待确认”（P1）
-
-本地证据：`test/reference/main.cpp` 生成的 `hpu_mem_config.json` 仍写 `RTL_CONFIRM_REQUIRED`，使用 `*_SHADOW`、合并的 `SIZE_LINES_SHADOW` 和 `HPU_MEM_STATUS` 名称；`memory_map.json`、README 和交付文档仍把数字偏移列为 pending。
+原生成文件写 `RTL_CONFIRM_REQUIRED`，使用 `*_SHADOW`、合并的
+`SIZE_LINES_SHADOW` 和旧状态寄存器名称。
 
 文档来源：《HPU 集成与编程手册》5.2.3 表 5.6。
 
@@ -101,15 +103,21 @@ cmd26[24:0] = control payload
 | `0x14` | `HPU_STATUS` |
 | `0x18` | `HPU_FAULT_STATUS` |
 
-修改建议：在 JSON 中输出数字 offset、读写属性和值，拆分 size low/high；更新 delivery 检查，删除该 pending 项。
+当前 `hpu_mem_config.json` 已输出上述数字 offset、访问属性、字段定义和具体值，
+size 已拆为 low/high；delivery 门禁会拒绝 `RTL_CONFIRM_REQUIRED`，项目文档也已
+删除“CSR 数字偏移待确认”。
 
-### A7. 模上下文镜像字节可兼容，但元数据和校验未按 48-bit mu 描述（P1）
+### A7. 模上下文 q32/mu48 ABI（已修复，2026-07-24）
 
-本地证据：当前镜像是四个 word：`q, mu_lo, mu_hi, reserved`；只检查 `modulus > 1`。
+原镜像虽然字节兼容，但元数据把记录描述为 `mu64+reserved32`，且只检查
+`modulus > 1`。
 
 文档来源：《HPU 集成与编程手册》3.1.2、3.5.4；《HPU_PE_反串讲》6.3。PE 有效 `mu` 为 48-bit，且模数必须满足 `65537 <= q <= 2^32-1`。
 
-由于合法 q 下 `floor(2^64/q)` 的高 16 位恒为 0，当前四个 word 的实际字节可与 `{reserved[47:0], mu[47:0], q[31:0]}` 兼容。仍应把 ABI 文案改成 `q32 + mu48 + reserved48`，并断言 `mu >> 48 == 0` 和 q 范围，避免以后换参数时静默生成 RTL 不支持的数据。
+当前生成器和 ABI 已统一为从低位到高位
+`{q[31:0], mu[47:0], reserved[47:0]}`，显式将 `word2[31:16]` 和 `word3`
+清零，并断言 `65537 <= q <= 2^32-1`、`mu >> 48 == 0`。delivery 门禁检查
+q 范围、`mu_bits=48` 和 `reserved_bits=48`。
 
 ### A8. 参数检查没有覆盖本地 SRAM/PE 能力（P1）
 
@@ -143,22 +151,22 @@ cmd26[24:0] = control payload
 
 当前软件 ABI 已统一表述为“同一 logical object id，物理 base 可由 controller 在 stage 完成后重分配并提交”，不再承诺物理原地。PE 文档中的版本差异仍需由 RTL release note 记录，但不会改变软件对象号。
 
-## 4. 飞书文档之间需要硬件负责人确认的矛盾
+## 4. 飞书文档历史矛盾与当前冻结结果
 
-这些项目不能直接由软件仓库单方面决定：
+下表记录来源之间的矛盾及按“新文档优先”或项目负责人决定采用的口径：
 
 | ID | 矛盾 | 来源文档 | 建议冻结口径 |
 | --- | --- | --- | --- |
 | C1 | `psync` 是否等待 custom1/DMA | 按当前首要基线《HPU 控制逻辑设计文档》，统一 inflight 完成包含 `extmem_done_pulse` | 已按包含 DMA 完成实现；模表 dload 后显式插入 `psync` |
-| C2 | custom1 是 rs1/rs2 line sideband，还是 VA 经 DTLB 后形成 `{paddr,len,dir,flags}` descriptor | 《HPU 集成与编程手册》5.2.2/9.1 与《RISC-V核内接口设计》custom1 HpuUnit 章节相反 | 按用户决定，保留项目现有 `rs1/rs2` 32-bit 位域，仅在原保留 `inst[8]` 增加 `flag[0]`；precode 后按控制逻辑命令格式消费 |
-| C3 | 模上下文记录是 `mu64+reserved32` 还是 `mu48+reserved48` | 《HPU 控制逻辑设计文档》写 `{reserved[31:0],mu[63:0],q[31:0]}`；《HPU 集成与编程手册》3.5.4 写 `{reserved[47:0],mu[47:0],q[31:0]}` | 以 PE 实际 48-bit 端口为准；合法 q 下两种全零高位镜像字节兼容，但文档统一为 mu48 |
+| C2 | custom1 是 rs1/rs2 line sideband，还是 VA 经 DTLB 后形成 `{paddr,len,dir,flags}` descriptor | 较新的《HPU 集成与编程手册》5.2.2/9.1 与较旧《RISC-V核内接口设计》custom1 HpuUnit 章节相反 | 以较新的集成手册为准：`GPR[rs1]=line_offset`、`GPR[rs2]=line_count`，单位 256B；旧 DTLB descriptor 方案不再是项目 ABI |
+| C3 | 模上下文记录是 `mu64+reserved32` 还是 `mu48+reserved48` | 较旧《HPU 控制逻辑设计文档》写 `{reserved[31:0],mu[63:0],q[31:0]}`；较新的《HPU 集成与编程手册》3.5.4 写 `{reserved[47:0],mu[47:0],q[31:0]}`，PE 端口也是 48-bit mu | 以较新的集成手册为准，项目已统一为 `q32+mu48+reserved48` |
 | C4 | NTT/INTT 物理 in-place 或 out-of-place | 《HPU 控制逻辑设计文档》为 out-of-place；《HPU_PE_反串讲》13.6 记录“设计改了 in-place / 分 stage 混合”的未决说明 | 软件只承诺 logical object id；RTL release note 给出物理策略 |
 | C5 | 32-bit 原始指令与 26-bit 内部命令映射 | 《HPU 控制逻辑设计文档》v0.4 规定 `cmd[25]=cmd_kind`；《RISC-V核内接口设计》只确认核侧可提取 custom0 的 `inst[31:7]`，其中后续 custom1 descriptor 方案与控制逻辑的统一命令入口不同 | 按项目负责人最新确认，以《HPU 控制逻辑设计文档》为准：kind 位于最高位，custom1 由 precode 重排语义字段并携带独立 sideband |
 
 ## 5. 建议实施顺序
 
-1. 冻结仍未解决的 C2-C4，并形成带版本号的 machine-readable target ABI；C1/C5 已冻结。
+1. 冻结仍未解决的 C4，并形成带版本号的 machine-readable target ABI；C1/C2/C3/C5 已冻结。
 2. A1/A2/A3 已完成，持续用 RV smoke 的 32/26-bit 期望表回归。
-3. 完成 A4、A6、A10：生成真实 DMA sideband、CSR 程序和可运行 host harness。
-4. 完成 A5、A7-A9：重做物理 twiddle、目标参数校验和 PE bit-exact UT。
+3. 完成 A4、A10：生成真实 DMA relocation/GPR 装载、CSR runtime 和可运行 host harness；A6 的数字 CSR 表已完成。
+4. 完成 A8-A9：补全目标参数校验和 PE bit-exact UT；A5/A7 已完成。
 5. 将 `.inst32 + cmd26 + HPU_MEM image + CSR sequence + expected checkpoints` 一起接入 RTL IT；只有该流程通过后，才能把 `HARDWARE_EXECUTION` 从 `CONDITIONAL` 改为 `PASS`。

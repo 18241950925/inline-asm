@@ -80,24 +80,68 @@ endif()
 if(NOT HARDWARE_ABI MATCHES "\"max_contexts\": 128")
     message(FATAL_ERROR "Hardware ABI does not enforce the 8-line Bank 5 capacity")
 endif()
+if(NOT HARDWARE_ABI MATCHES "\"rs1_value\": \"HPU_MEM line offset\"")
+    message(FATAL_ERROR "Hardware ABI does not freeze custom1 rs1 as the HPU_MEM line offset")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"rs2_value\": \"line count\"")
+    message(FATAL_ERROR "Hardware ABI does not freeze custom1 rs2 as the nonzero line count")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"q_min\": 65537")
+    message(FATAL_ERROR "Hardware ABI does not enforce the PE minimum modulus")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"q_max\": 4294967295")
+    message(FATAL_ERROR "Hardware ABI does not enforce the PE maximum modulus")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"mu_bits\": 48")
+    message(FATAL_ERROR "Hardware ABI does not describe the PE 48-bit Barrett mu")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"reserved_bits\": 48")
+    message(FATAL_ERROR "Hardware ABI does not describe the 48 reserved context bits")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"stage_payload_words\": 2048")
+    message(FATAL_ERROR "Hardware ABI does not provide N/2 physical twiddles per stage")
+endif()
+if(NOT HARDWARE_ABI MATCHES "\"stage_payload_lines\": 32")
+    message(FATAL_ERROR "Hardware ABI stage twiddles do not occupy N/128 HPU lines")
+endif()
 
 file(READ "${ROOT}/outputs/ciphertext_multiply/test_data/hardware/hpu_mem_config.json" HPU_MEM_CONFIG)
 if(NOT HPU_MEM_CONFIG MATCHES "\"words_per_line\": 64")
     message(FATAL_ERROR "HPU_MEM configuration does not use 64 uint32 words per line")
 endif()
+foreach(CSR_OFFSET 0x00 0x04 0x08 0x0c 0x10 0x14 0x18)
+    if(NOT HPU_MEM_CONFIG MATCHES "\"offset\": \"${CSR_OFFSET}\"")
+        message(FATAL_ERROR "HPU_MEM configuration is missing CSR offset ${CSR_OFFSET}")
+    endif()
+endforeach()
+if(HPU_MEM_CONFIG MATCHES "RTL_CONFIRM_REQUIRED")
+    message(FATAL_ERROR "HPU_MEM configuration still marks frozen CSR offsets unresolved")
+endif()
 
 file(READ "${ROOT}/outputs/ciphertext_multiply/test_data/hardware/mod_ctx_map.csv" MOD_CTX_MAP)
-if(NOT MOD_CTX_MAP MATCHES "barrett_mu_hex")
-    message(FATAL_ERROR "Hardware mod_ctx map does not contain Barrett mu")
+if(NOT MOD_CTX_MAP MATCHES "barrett_mu48_hex")
+    message(FATAL_ERROR "Hardware mod_ctx map does not contain 48-bit Barrett mu")
 endif()
 
 file(READ "${ROOT}/outputs/ciphertext_multiply/test_data/hardware/twiddle_map.csv" TWIDDLE_MAP)
-if(NOT TWIDDLE_MAP MATCHES "ntt,0,[0-9]+,butterfly,11")
-    message(FATAL_ERROR "Hardware twiddle map is missing NTT stage 11")
-endif()
-if(NOT TWIDDLE_MAP MATCHES "intt,0,[0-9]+,butterfly,11")
-    message(FATAL_ERROR "Hardware twiddle map is missing INTT stage 11")
-endif()
+file(STRINGS "${ROOT}/outputs/ciphertext_multiply/test_data/hardware/twiddle_map.csv"
+    TWIDDLE_ROWS)
+foreach(DIRECTION ntt intt)
+    foreach(STAGE RANGE 0 11)
+        set(STAGE_FOUND 0)
+        foreach(TWIDDLE_ROW IN LISTS TWIDDLE_ROWS)
+            if(TWIDDLE_ROW MATCHES
+                    "^${DIRECTION},0,[0-9]+,butterfly,${STAGE},2048,"
+                    AND TWIDDLE_ROW MATCHES ",32$")
+                set(STAGE_FOUND 1)
+            endif()
+        endforeach()
+        if(NOT STAGE_FOUND)
+            message(FATAL_ERROR
+                "Hardware twiddle map does not provide 2048 words/32 lines for ${DIRECTION} stage ${STAGE}")
+        endif()
+    endforeach()
+endforeach()
 
 file(READ "${ROOT}/output/ciphertext_multiply.asm" CIPHERTEXT_ASM)
 foreach(MARKER
@@ -228,10 +272,12 @@ file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "OPERATOR_UT_PACKAGES=PASS\n"
     "HARDWARE_UINT32_IMAGES=PASS\n"
     "HPU_LINE_LAYOUT_256B=PASS\n"
-    "MOD_CTX_BARRETT=PASS\n"
+    "CUSTOM1_LINE_SIDEBAND=PASS\n"
+    "HPU_MEM_CSR_MAP=PASS\n"
+    "MOD_CTX_Q32_MU48=PASS\n"
     "STAGE_TWIDDLE_LAYOUT=PASS\n"
     "CIPHERTEXT_MULTIPLY_INST32_COUNT=${INST32_COUNT}\n"
     "HARDWARE_EXECUTION=CONDITIONAL\n"
-    "PENDING=numeric CSR offsets, instruction rs1/rs2 sideband binding, scratch map, mod_table_base_line binding\n")
+    "PENDING=DMA instruction relocation/GPR loading, scratch map, mod_table_base_line binding\n")
 
 message(STATUS "HPU software delivery check PASS (${INST32_COUNT} ciphertext-multiply instructions)")
