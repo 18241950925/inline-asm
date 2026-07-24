@@ -664,7 +664,7 @@ on completion:
 dstore x10, x11, p2, 1    # 0x00B5542B
 ```
 
-### 7.3 HPU_MEM CSR
+<!-- ### 7.3 HPU_MEM CSR
 
 HPU_MEM window 使用以下已冻结的 CSR 偏移：
 
@@ -681,7 +681,7 @@ HPU_MEM window 使用以下已冻结的 CSR 偏移：
 软件先写 base low/high 和 size low/high，再向 `HPU_MEM_COMMIT` 写 1，最后读
 `HPU_STATUS`，要求 `window_valid=1` 且 `fault_valid=0`。故障处理完成后向
 `HPU_FAULT_STATUS.fault_valid` 写 1 清除。生成文件
-`hardware/hpu_mem_config.json` 给出当前镜像的具体值和同一编程顺序。
+`hardware/hpu_mem_config.json` 给出当前镜像的具体值和同一编程顺序。 -->
 
 ## 8. 推荐编程序列
 
@@ -819,7 +819,4 @@ ctest --test-dir build --output-on-failure
 3. RTL 是否按已生成的 group-major 次序消费 twiddle，并按 out-of-place 协议提交各 stage 新 base。
 4. cache maintenance、中断和 fault 的 runtime 实现。
 
-custom1 line sideband、HPU_MEM CSR、stage twiddle 数量/顺序和 mod context
-位布局、Bank 5 地址、mod-table base、negacyclic pre/post factor 和物理
-out-of-place 规则已经冻结；上述列表是尚未实现的 runtime/RTL 行为，不是这些
-ABI 的备选解释。
+上述列表是尚未实现的 runtime/RTL 行为，不是这些ABI 的备选解释。
