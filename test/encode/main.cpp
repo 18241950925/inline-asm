@@ -161,9 +161,9 @@ void write_rv_interface_smoke(const std::filesystem::path& outputs_root) {
         "pntt p0, p3, 15, 3, 1\n"
         "pintt p0, p3, 0, 0, 0\n"
         "pfree p5\n"
-        "psync\n"
         "dstore x10, x11, p2, 0\n"
-        "dstore x10, x11, p2, 1\n";
+        "dstore x10, x11, p2, 1\n"
+        "psync\n";
 
     const auto case_dir = outputs_root / "rv_interface_smoke";
     const auto test_data_dir = case_dir / "test_data";

@@ -21,4 +21,4 @@ std::string generate_hpu_modup_asm(
     int num_q_digit,
     int num_p,
     int q_offset = 0,
-    bool append_psync = false);
+    bool append_psync = true);

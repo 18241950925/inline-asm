@@ -1,6 +1,6 @@
 # HPU 最新文档符合性审计
 
-审计日期：2026-07-24
+审计日期：2026-08-18
 
 ## 1. 审计基线
 
@@ -12,6 +12,7 @@
 4. [HPU_PE_反串讲](https://icnj64z5e8zz.feishu.cn/wiki/T7pTwV4eiiJbXHkTkrAcgDzxn0g)，v0.1，2026-06-22。PE 位宽、Barrett、twiddle 和 NTT/INTT 数据通路验证基线。
 5. [HPU](https://icnj64z5e8zz.feishu.cn/wiki/MZkHwbivGiOs7ekMGb0cMSk5nTY)。知识库根文档，包含新旧章节，只用于定位历史约定，不作为单一冻结版本。
 6. [HPU 通过 DMA 访问主存的实现方案讨论稿](https://icnj64z5e8zz.feishu.cn/wiki/KOfhwRW4Oi33f6kPEXWcJJwDnSS)。该文档明确是讨论稿；当它与集成手册冲突时，以集成手册为准。
+7. 硬件负责人于 2026-08-18 确认：DMA 一致性由硬件维护，`psync` 不作为 DMA 等待屏障，只在整个程序完成后用于通知 CPU。该确认覆盖此前文档中关于软件插入 DMA 屏障的推断。
 
 ## 2. 已完成修复
 
@@ -53,11 +54,11 @@ cmd26[24:0] = control payload
 3. 所有算子生成器均改为 `pmodld(i)`，不再把 `p4` 编入 `pmodld`。
 4. `MOD_ID` 编码仍为 8-bit；Bank 5 为 32 line、物理可放 512 个 context，但生成器受编码限制最多生成 256 个。对象槽位仍独立保持 8 个。
 
-`dload type=2, flag[0]=1` 现在显式请求 allocator 将模表对象分配到 small Bank 5；生成器在首条 `pmodld` 前插入 `psync`。模表对象是具有 `ALLOC/V/busy/base/len` 的真实逻辑对象，不再描述为“仅 DMA 句柄”。`MOD_TABLE_BASE_LINE` 已按最新集成手册冻结为 `0x1400`。
+`dload type=2, flag[0]=1` 现在显式请求 allocator 将模表对象分配到 small Bank 5。模表对象是具有 `ALLOC/V/busy/base/len` 的真实逻辑对象，不再描述为“仅 DMA 句柄”。DMA 与首条 `pmodld` 的一致性由硬件维护，生成器不再在两者之间插入 `psync`。`MOD_TABLE_BASE_LINE` 已按最新集成手册冻结为 `0x1400`。
 
-### A3. `pfree` 对象字段和 `psync` 载荷（已修复，2026-07-23）
+### A3. `pfree` 对象字段和 `psync` 载荷（已修复，2026-08-18 更新语义）
 
-`pfree` 对象已移动到原始 custom0 `PSRC/OBJ_ID=[24:22]`；其他载荷位为 0。`psync` 语法改为无操作数，所有载荷位为 0，并按控制逻辑统一 inflight 屏障使用。
+`pfree` 对象已移动到原始 custom0 `PSRC/OBJ_ID=[24:22]`；其他载荷位为 0。`psync` 语法为无操作数、所有载荷位为 0；根据 2026-08-18 硬件负责人确认，它只作为完整程序最后一条指令通知 CPU，不再作为统一 inflight 或 DMA 屏障使用。
 
 ### A4. 当前 `.inst32` 不是硬件可执行 DMA 流（P0）
 
@@ -194,7 +195,7 @@ lane transpose 实现，不再虚构独立隐式 shuffle。
 
 | ID | 矛盾 | 来源文档 | 建议冻结口径 |
 | --- | --- | --- | --- |
-| C1 | `psync` 是否等待 custom1/DMA | 按当前首要基线《HPU 控制逻辑设计文档》，统一 inflight 完成包含 `extmem_done_pulse` | 已按包含 DMA 完成实现；模表 dload 后显式插入 `psync` |
+| C1 | `psync` 是否等待 custom1/DMA | 旧版《HPU 控制逻辑设计文档》曾引出统一 inflight 屏障解释；硬件负责人于 2026-08-18 进一步确认 DMA 一致性由硬件维护 | `psync` 仅在完整程序末尾通知 CPU；模表 dload 后不插入 `psync`，内部算子阶段也不使用它 |
 | C2 | custom1 是 rs1/rs2 line sideband，还是 VA 经 DTLB 后形成 `{paddr,len,dir,flags}` descriptor | 较新的《HPU 集成与编程手册》5.2.2/9.1 与较旧《RISC-V核内接口设计》custom1 HpuUnit 章节相反 | 以较新的集成手册为准：`GPR[rs1]=line_offset`、`GPR[rs2]=line_count`，单位 256B；旧 DTLB descriptor 方案不再是项目 ABI |
 | C3 | 模上下文记录是 `mu64+reserved32` 还是 `mu48+reserved48` | 较旧《HPU 控制逻辑设计文档》写 `{reserved[31:0],mu[63:0],q[31:0]}`；较新的《HPU 集成与编程手册》3.5.4 写 `{reserved[47:0],mu[47:0],q[31:0]}`，PE 端口也是 48-bit mu | 以较新的集成手册为准，项目已统一为 `q32+mu48+reserved48` |
 | C4 | NTT/INTT 物理 in-place 或 out-of-place | 较新的《HPU 集成与编程手册》3.4.6 与控制文档均为 out-of-place；较旧《HPU_PE_反串讲》13.6 只是未决记录 | 以较新的集成手册为准：每 stage 物理 out-of-place，完成后向同一 logical object id 提交新 base |

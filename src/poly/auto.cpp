@@ -47,7 +47,6 @@ std::string generate_hpu_auto_body_asm(
     const int POBJ_MOD_CTX = 4; // small-bank 模表对象
 	asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
-    asm_code << hpu::psync();
 
     asm_code << "        /* ========================================================== */\n";
     asm_code << "        /* --- Step 0: Manual Automorphism on c0 (NTT -> iNTT_auto)   */\n";
@@ -77,7 +76,6 @@ std::string generate_hpu_auto_body_asm(
         asm_code << generate_hpu_modup_body_asm(digit_size, num_p, q_offset, false);
         asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                                hpu::DloadFlag::small_bank);
-        asm_code << hpu::psync();
 
         asm_code << "        /* --- Step 2: Fused NTT Auto on Q and P bases --- */\n";
         for (int i = 0; i < total_bases; ++i) {
@@ -118,7 +116,6 @@ std::string generate_hpu_auto_body_asm(
     asm_code << "\n        /* --- Step 4: INTT on the keyed outputs --- */\n";
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
-    asm_code << hpu::psync();
     for (int v = 0; v < 2; ++v) {
         for (int i = 0; i < total_bases; ++i) {
             asm_code << hpu::pmodld(mod_ctx_index(i));
@@ -140,7 +137,6 @@ std::string generate_hpu_auto_body_asm(
     asm_code << "\n        /* --- Step 6: Final Merge (c0 + out0) --- */\n";
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
-    asm_code << hpu::psync();
     for (int i = 0; i < num_q; ++i) {
         asm_code << hpu::pmodld(mod_ctx_index_q(i));
         // SLOT_A 读取 Step 5 降模后的 out0

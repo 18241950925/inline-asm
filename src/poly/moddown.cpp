@@ -43,7 +43,6 @@ std::string generate_hpu_moddown_body_asm(
     asm_code << "        // dload all mod contexts (placeholder)\n";
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
-    asm_code << hpu::psync();
 
     asm_code << "        /* MODDOWN stage-2: q <- q - correction (mod q_i) */\n";
     for (int i = 0; i < num_q; ++i) {

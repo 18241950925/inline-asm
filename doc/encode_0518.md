@@ -126,7 +126,7 @@ outputs/<case>/
 - `.inst32`：RV 侧看到的原始 32-bit custom 指令。
 - `.cmd26`：控制逻辑接收的命令，`cmd26[25]=custom_kind`。custom0 的 payload 为 `inst[31:7]`；custom1 将 `flag/OBJ_ID/TYPE/DIR` 重排进 payload，`rs1/rs2` 形成独立 line offset/count sideband。
 
-`dload` 语法为 `dload rs1, rs2, pdst, type, small_bank`。`small_bank` 编码到原始 `inst[8]`；模上下文固定使用 `type=2, small_bank=1` 请求 Bank 5，并在首条 `pmodld` 前执行 `psync`。
+`dload` 语法为 `dload rs1, rs2, pdst, type, small_bank`。`small_bank` 编码到原始 `inst[8]`；模上下文固定使用 `type=2, small_bank=1` 请求 Bank 5。DMA 一致性由硬件维护，首条 `pmodld` 前不需要 `psync`；`psync` 仅作为完整程序的最后一条指令通知 CPU。
 
 | 算子 | ASM | `.inst32` / `.cmd26` | reference test data |
 | --- | --- | --- | --- |

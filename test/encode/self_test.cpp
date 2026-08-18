@@ -51,15 +51,16 @@ int main()
             "pntt p0, p3, 15, 3, 1\n"
             "pintt p0, p3, 15, 3, 1\n"
             "pfree p5\n"
-            "psync\n"
-            "dstore x10, x11, p2, 1\n";
+            "dstore x10, x11, p2, 1\n"
+            "psync\n";
         const auto encoded = hpu::assemble_source(smoke);
         if (encoded.size() != 12) {
             throw std::runtime_error("unexpected smoke instruction count");
         }
         if ((encoded.front().word & 0x7fU) != 0x2bU
-            || (encoded.back().word & 0x7fU) != 0x2bU
-            || (encoded[2].word & 0x7fU) != 0x0bU) {
+            || (encoded[10].word & 0x7fU) != 0x2bU
+            || (encoded[2].word & 0x7fU) != 0x0bU
+            || (encoded.back().word & 0x7fU) != 0x0bU) {
             throw std::runtime_error("custom opcode routing mismatch");
         }
         for (const auto& item : encoded) {

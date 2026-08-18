@@ -123,7 +123,6 @@ std::string generate_hpu_ntt_asm(
     asm_code << "    __asm__ volatile(\n";
     asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
-    asm_code << hpu::psync();
     asm_code << hpu::pmodld(0);
     asm_code << generate_hpu_ntt_body_asm(
         N,
@@ -164,7 +163,6 @@ std::string generate_hpu_intt_asm(
     asm_code << "    __asm__ volatile(\n";
     asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
-    asm_code << hpu::psync();
     asm_code << hpu::pmodld(0);
     asm_code << generate_hpu_intt_body_asm(
         N,

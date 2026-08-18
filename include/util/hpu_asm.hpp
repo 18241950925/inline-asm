@@ -128,7 +128,7 @@ inline std::string pfree(int idx0) {
     return ss.str();
 }
 
-// --- SYNC 格式：同步屏障类 ---
+// --- SYNC 格式：完整程序结束后通知 CPU；不用于 DMA 一致性 ---
 inline std::string psync() {
     return "        \"psync \\n\\t\"\n";
 }

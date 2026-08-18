@@ -275,7 +275,6 @@ foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch cip
 endforeach()
 
 function(CHECK_MOD_CONTEXT_LOAD RELATIVE_PATH)
-    set(WAITING_FOR_SYNC 0)
     file(STRINGS "${ROOT}/${RELATIVE_PATH}" ASM_LINES)
     foreach(LINE IN LISTS ASM_LINES)
         if(LINE MATCHES "\"dload [^,]+, [^,]+, p[0-7], [013], 1")
@@ -283,22 +282,41 @@ function(CHECK_MOD_CONTEXT_LOAD RELATIVE_PATH)
                 "${RELATIVE_PATH}: non-mod_ctx dload requests reserved small Bank 5")
         elseif(LINE MATCHES "\"dload [^,]+, [^,]+, p[0-7], 2, 0")
             message(FATAL_ERROR "${RELATIVE_PATH}: mod_ctx dload does not set small-bank flag[0]")
-        elseif(LINE MATCHES "\"dload [^,]+, [^,]+, p[0-7], 2, 1")
-            set(WAITING_FOR_SYNC 1)
-        elseif(WAITING_FOR_SYNC AND LINE MATCHES "\"pmodld ")
-            message(FATAL_ERROR "${RELATIVE_PATH}: pmodld can issue before mod_ctx DMA completion")
-        elseif(WAITING_FOR_SYNC AND LINE MATCHES "\"psync")
-            set(WAITING_FOR_SYNC 0)
         endif()
     endforeach()
-    if(WAITING_FOR_SYNC)
-        message(FATAL_ERROR "${RELATIVE_PATH}: mod_ctx DMA has no following psync")
-    endif()
 endfunction()
 
 foreach(CASE_NAME ntt intt bconv pmult cmult modup moddown auto keyswitch ciphertext_multiply)
     CHECK_MOD_CONTEXT_LOAD("output/${CASE_NAME}.asm")
 endforeach()
+
+function(CHECK_TERMINAL_PSYNC RELATIVE_PATH)
+    set(PSYNC_COUNT 0)
+    set(LAST_OPCODE "")
+    file(STRINGS "${ROOT}/${RELATIVE_PATH}" ASM_LINES)
+    foreach(LINE IN LISTS ASM_LINES)
+        if(LINE MATCHES "^[ \t]*\"?(padd|psub|pmul|pmac|pntt|pintt|pmodld|pfree|psync|dload|dstore)")
+            set(LAST_OPCODE "${CMAKE_MATCH_1}")
+            if(LAST_OPCODE STREQUAL "psync")
+                math(EXPR PSYNC_COUNT "${PSYNC_COUNT} + 1")
+            endif()
+        endif()
+    endforeach()
+    if(NOT PSYNC_COUNT EQUAL 1)
+        message(FATAL_ERROR
+            "${RELATIVE_PATH}: complete stream must contain exactly one psync, found ${PSYNC_COUNT}")
+    endif()
+    if(NOT LAST_OPCODE STREQUAL "psync")
+        message(FATAL_ERROR
+            "${RELATIVE_PATH}: psync must be the final instruction, found ${LAST_OPCODE}")
+    endif()
+endfunction()
+
+foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch ciphertext_multiply)
+    CHECK_TERMINAL_PSYNC("output/${CASE_NAME}.asm")
+    CHECK_TERMINAL_PSYNC("output/${CASE_NAME}.cpp")
+endforeach()
+CHECK_TERMINAL_PSYNC("outputs/rv_interface_smoke/rv_interface_smoke.asm")
 
 file(STRINGS "${ROOT}/outputs/ciphertext_multiply/ciphertext_multiply.inst32" INST32_LINES)
 list(LENGTH INST32_LINES INST32_COUNT)
@@ -317,6 +335,8 @@ file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "ASM_ENCODING=PASS\n"
     "PRECODE_CMD26=PASS\n"
     "MOD_CTX_SMALL_BANK_FLAG=PASS\n"
+    "DMA_CONSISTENCY_HARDWARE_MANAGED=PASS\n"
+    "TERMINAL_PSYNC=PASS\n"
     "INSTRUCTION_SET_11=PASS\n"
     "PFREE_LIFECYCLE=PASS\n"
     "RV_INTERFACE_SMOKE=PASS\n"
@@ -332,6 +352,6 @@ file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "NTT_PHYSICAL_OUT_OF_PLACE=PASS\n"
     "CIPHERTEXT_MULTIPLY_INST32_COUNT=${INST32_COUNT}\n"
     "HARDWARE_EXECUTION=CONDITIONAL\n"
-    "PENDING=DMA instruction relocation/GPR loading, scratch map, runtime cache/fault/interrupt handling\n")
+    "PENDING=DMA instruction relocation/GPR loading, scratch map, runtime cache/fault/terminal-psync handling\n")
 
 message(STATUS "HPU software delivery check PASS (${INST32_COUNT} ciphertext-multiply instructions)")

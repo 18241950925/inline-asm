@@ -1145,7 +1145,7 @@ void write_hardware_package(const std::filesystem::path& test_data_root,
                << "  \"custom1_sideband\": \"GPR[rs1]=line_offset, GPR[rs2]=line_count, both in 256-byte line units\",\n"
                << "  \"hardware_fields_pending\": [\"DMA instruction relocation and GPR value loading\", "
                   "\"scratch allocation\", "
-                  "\"host-visible DMA completion\"]\n}\n";
+                  "\"host handling of the terminal psync notification\"]\n}\n";
     write_text(test_data_root / "memory_map.json", memory_map.str());
 
     write_text(hardware_root / "README.md",
@@ -1158,13 +1158,13 @@ void write_hardware_package(const std::filesystem::path& test_data_root,
                "mathematical golden. `mod_ctx_map.csv` documents q and Barrett mu records. "
                "Load that image with dload type=2 and flag[0]=1 so the object allocator "
                "places it in 32-line small Bank 5 at MOD_TABLE_BASE_LINE=0x1400; "
-               "wait for DMA completion before pmodld. "
+               "hardware maintains DMA consistency, so pmodld needs no software psync. "
                "`twiddle_map.csv` gives each modulus, direction, phase, stage, line offset, "
                "and line count. Every individual binary has an annotated hex view.\n\n"
                "The physical host-memory ABI in `abi.json` is complete. "
                "Custom1 sideband semantics and CSR offsets are frozen in `abi.json` and "
                "`hpu_mem_config.json`. DMA relocation/GPR loading, SRAM scratch allocation, "
-               "and completion signaling still require runtime integration.\n");
+               "and terminal psync completion handling still require runtime integration.\n");
 }
 
 void write_case_package(const std::filesystem::path& suite_root,

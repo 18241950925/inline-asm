@@ -116,7 +116,8 @@ void test_intt_codegen() {
 		kNttCfg.N,
 		kNttCfg.obj_poly,
 		kNttCfg.twiddle_obj,
-		kNttCfg.mod_ctx_obj);
+		kNttCfg.mod_ctx_obj,
+		true);
 	std::ofstream("output/intt.cpp") << intt;
 	std::cout << "Saved intt ASM to output/intt.cpp\n";
 	}
@@ -125,7 +126,8 @@ void test_intt_codegen() {
 		std::string intt_body = generate_hpu_intt_body_asm(
 		kNttCfg.N,
 		kNttCfg.obj_poly,
-		kNttCfg.twiddle_obj);
+		kNttCfg.twiddle_obj,
+		true);
 	std::ofstream("output/intt.asm") << intt_body;
 	std::cout << "Saved intt body ASM to output/intt.asm\n";
 	}
@@ -138,7 +140,8 @@ void test_ntt_codegen()
 		kNttCfg.N,
 		kNttCfg.obj_poly,
 		kNttCfg.twiddle_obj,
-		kNttCfg.mod_ctx_obj);
+		kNttCfg.mod_ctx_obj,
+		true);
 	std::ofstream("output/ntt.cpp") << ntt;
 	std::cout << "Saved ntt ASM to output/ntt.cpp\n";
 	}
@@ -147,7 +150,8 @@ void test_ntt_codegen()
 		std::string ntt_body = generate_hpu_ntt_body_asm(
 		kNttCfg.N,
 		kNttCfg.obj_poly,
-		kNttCfg.twiddle_obj);
+		kNttCfg.twiddle_obj,
+		true);
 	std::ofstream("output/ntt.asm") << ntt_body;
 	std::cout << "Saved ntt body ASM to output/ntt.asm\n";
 	}
@@ -160,7 +164,8 @@ void test_mm_codegen()
 		kMmCfg.obj_a,
 		kMmCfg.obj_b,
 		kMmCfg.obj_c,
-		kMmCfg.mod_ctx_obj);
+		kMmCfg.mod_ctx_obj,
+		true);
 	std::ofstream("output/mm.cpp") << mm;
 	std::cout << "Saved mm ASM to output/mm.cpp\n";
 	}
@@ -169,7 +174,8 @@ void test_mm_codegen()
 		std::string mm_body = generate_hpu_mm_body_asm(
 		kMmCfg.obj_a,
 		kMmCfg.obj_b,
-		kMmCfg.obj_c);
+		kMmCfg.obj_c,
+		true);
 	std::ofstream("output/mm.asm") << mm_body;
 	std::cout << "Saved mm body ASM to output/mm.asm\n";
 	}
@@ -180,7 +186,9 @@ void test_bconv_codegen()
 	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
 		std::string bconv = generate_hpu_bconv_asm(
 		kBconvCfg.num_q,
-		kBconvCfg.num_p);
+		kBconvCfg.num_p,
+		0,
+		true);
 	std::ofstream("output/bconv.cpp") << bconv;
 	std::cout << "Saved bconv ASM to output/bconv.cpp\n";
 	}
@@ -188,7 +196,9 @@ void test_bconv_codegen()
 	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
 		std::string bconv_body = generate_hpu_bconv_body_asm(
 		kBconvCfg.num_q,
-		kBconvCfg.num_p);
+		kBconvCfg.num_p,
+		0,
+		true);
 	std::ofstream("output/bconv.asm") << bconv_body;
 	std::cout << "Saved bconv body ASM to output/bconv.asm\n";
 	}
@@ -238,6 +248,7 @@ void test_modup_codegen()
 		std::string modup = generate_hpu_modup_asm(
 		kBconvCfg.num_q,
 		kBconvCfg.num_p,
+		0,
 		true);
 	std::ofstream("output/modup.cpp") << modup;
 	std::cout << "Saved modup ASM to output/modup.cpp\n";
@@ -247,6 +258,7 @@ void test_modup_codegen()
 		std::string modup_body = generate_hpu_modup_body_asm(
 		kBconvCfg.num_q,
 		kBconvCfg.num_p,
+		0,
 		true);
 	std::ofstream("output/modup.asm") << modup_body;
 	std::cout << "Saved modup body ASM to output/modup.asm\n";

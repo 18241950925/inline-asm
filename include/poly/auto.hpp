@@ -16,4 +16,4 @@ std::string generate_hpu_auto_asm(
 	int num_p,
 	int dnum,
 	int auto_idx,
-	bool append_psync = false);
+	bool append_psync = true);

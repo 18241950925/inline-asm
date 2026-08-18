@@ -8,7 +8,7 @@ std::string generate_hpu_cmult_body_asm(
 
 std::string generate_hpu_cmult_asm(
     int num_q,
-    bool append_psync = false);
+    bool append_psync = true);
 
 // std::string generate_hpu_cmult_ntt_asm(
 //     int N,

@@ -113,8 +113,8 @@ Encrypt(ctA, ctB)
 `{q[31:0], mu[47:0], reserved[47:0]}`，其中
 `mu=floor(2^64/q)`，且 `65537 <= q <= 2^32-1`。按 `uint32` word
 查看时是 `q`、`mu[31:0]`、`{16'b0,mu[47:32]}`、全零保留字。模表通过
-`dload type=2, flag[0]=1` 请求分配到 small Bank 5，DMA 完成后由 `psync`
-建立可见性，再由 `pmodld MOD_ID` 选择表项。Bank 5 固定为
+`dload type=2, flag[0]=1` 请求分配到 small Bank 5，DMA 与后续访问的
+一致性由硬件维护，软件可直接由 `pmodld MOD_ID` 选择表项。Bank 5 固定为
 `0x1400..0x141F` 共 32 line，物理可放 512 条记录；但 `MOD_ID` 为 8 bit，
 所以软件只允许 256 个 context，寻址 `0x1400..0x140F`。
 
@@ -151,14 +151,14 @@ group-major butterfly 顺序展开为固定 `N/2` 个 `uint32`，即 `N/128` 条
 - `test_data/expected_cmd26.csv`：逐条验证 `cmd26[25]=custom_kind`、custom0 payload 直通和 custom1 语义字段重排。
 - `test_data/negative_cases.asm.txt`：包含越界用例，以及必须拒绝的旧 `pshcfg/pshuf/pseed/psample` 助记符。
 
-建议 RV 接口 IT 依次验证 decode 路由、队列 backpressure、顺序发射、`pmodld -> compute` 可见性、`dload -> compute -> pfree/dstore rel=1` ownership，以及 `psync` 中断边界。`pfree` 必须在目标对象最后一次使用后生效；已经由 `dstore rel=1` 释放的对象不得重复释放。
+建议 RV 接口 IT 依次验证 decode 路由、队列 backpressure、顺序发射、`dload -> pmodld -> compute` 的硬件一致性、`dload -> compute -> pfree/dstore rel=1` ownership，以及末尾 `psync` 的 CPU 完成通知。`pfree` 必须在目标对象最后一次使用后生效；已经由 `dstore rel=1` 释放的对象不得重复释放。
 
 ## 7. 硬件联调前置确认
 
-以下五项必须由控制逻辑、SRAM、DMA 和软件负责人共同签字确认，确认后才能把当前交付从“软件可验收”升级为“硬件可直接运行”。数据包已经给出软件侧 V1 值和布局，签字重点是 RTL 是否按同一 ABI 消费：
+以下前四项仍需由控制逻辑、SRAM、DMA 和软件负责人共同签字确认，确认后才能把当前交付从“软件可验收”升级为“硬件可直接运行”。第 5 项记录硬件负责人已经确认的 `psync` 与 DMA 一致性口径：
 
 1. runtime 按已冻结的 `GPR[rs1]=line_offset`、`GPR[rs2]=line_count` 语义，将 `line_map.csv` 的具体值绑定到每条 DMA 指令。
 2. RTL 接受 V1 `mod_ctx = {reserved48, mu48, q32}`、32-line Bank 5 与固定 `MOD_TABLE_BASE_LINE=0x1400`。
 3. RTL 的 `pntt/pintt stage` 接受 `twiddle_map.csv` 的 `N/2` group-major DIT 次序、物理 out-of-place 提交，以及显式 pre/post PMUL；当前数据为 canonical residue，不是 Montgomery 域。
 4. ct、tensor、ModUp、rlk、KeySwitch scratch 的物理地址，以及 RTL 对 `pfree` 和 `dstore rel=1` 生命周期语义的实现。
-5. 控制逻辑按统一 inflight 计数实现 `psync`，并覆盖 DMA、计算和配置完成事件；联调需确认完成事件与异常上报。
+5. `psync` 只放在整个程序的最后，用于向 CPU 报告程序完成；DMA 一致性由硬件维护，算子内部不插入 `psync` 等待 DMA。

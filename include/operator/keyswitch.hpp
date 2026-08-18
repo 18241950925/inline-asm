@@ -14,4 +14,4 @@ std::string generate_hpu_keyswitch_asm(
     int num_q,
     int num_p,
     int dnum,
-    bool append_psync = false);
+    bool append_psync = true);

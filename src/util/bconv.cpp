@@ -43,11 +43,10 @@ std::string generate_hpu_bconv_contexts_body_asm(
     // 阶段一：预处理 (Pre-multiply)
     // 对每个输入基 b_j 计算: x_j = [a_j * b_hat_inv] mod b_j
     // ==========================================
-    // 一次性加载模表对象，并等待 Bank 5 中的数据有效。
+    // 一次性加载模表对象；DMA 与后续 pmodld 的一致性由硬件维护。
     asm_code << "        // dload all mod contexts (placeholder)\n";
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
-    asm_code << hpu::psync();
 
     asm_code << "        /* --- STAGE 1: Precompute in source basis --- */\n";
     for (std::size_t j = 0; j < source_contexts.size(); ++j) {

@@ -26,7 +26,7 @@ HPU 指令均为 32-bit 定长指令，使用两个 RISC-V custom opcode：
 
 | 类别 | 低 7-bit opcode | 用途 |
 | --- | --- | --- |
-| `custom0` | `0001011` (`0x0B`) | 模运算、NTT/INTT、配置、同步和对象释放 |
+| `custom0` | `0001011` (`0x0B`) | 模运算、NTT/INTT、配置、完成通知和对象释放 |
 | `custom1` | `0101011` (`0x2B`) | 外部存储器与 HPU 对象之间的数据搬运 |
 
 当前软件 ISA 包含 11 条指令：
@@ -40,7 +40,7 @@ HPU 指令均为 32-bit 定长指令，使用两个 RISC-V custom opcode：
 | `pntt` | STG | `OPC=0100` | 前向 NTT 的一个 stage |
 | `pintt` | STG | `OPC=0101` | 逆向 NTT 的一个 stage |
 | `pmodld` | MOD | `OPC=0110` | 按 `MOD_ID` 选择并激活固定模表项 |
-| `psync` | SYNC | `OPC=0111` | 建立 HPU 指令流同步边界 |
+| `psync` | SYNC | `OPC=0111` | 在程序末尾通知 CPU 执行完成 |
 | `pfree` | CFG | `OPC=1000` | 释放对象槽位 |
 | `dload` | DMA | `DIR=0` | 外部存储器到 HPU 对象 |
 | `dstore` | DMA | `DIR=1` | HPU 对象到外部存储器 |
@@ -92,20 +92,20 @@ mu = floor(2^64 / q), 48-bit Barrett reciprocal
 `0x1400..0x141F`，模表基址 `MOD_TABLE_BASE_LINE=0x1400`。Bank 5 物理上
 可容纳 512 个 128-bit context，但 `pmodld` 的 `MOD_ID` 只有 8 bit，因此
 当前软件 ABI 最多寻址 256 个 context，对应 `0x1400..0x140F`。其余 Bank 5
-空间不扩展 `MOD_ID` 编码。模表 DMA 完成后，`pmodld MOD_ID` 从该表选择当前
-上下文；切换 Q/P limb 前必须重新执行 `pmodld`。
+空间不扩展 `MOD_ID` 编码。DMA 与后续访问的一致性由硬件维护，软件可在模表
+`dload` 后直接通过 `pmodld MOD_ID` 选择当前上下文；切换 Q/P limb 前必须重新执行 `pmodld`。
 
 ### 1.5 指令顺序和对象生命周期
 
 当前生成器按程序顺序建立数据依赖，推荐遵循以下规则：
 
-1. 使用对象前先执行对应 `dload`，并等待后端认为对象有效。
+1. 使用对象前先执行对应 `dload`；硬件负责等待对象有效并维护 DMA 一致性。
 2. 先执行 `pmodld`，再发出使用该模数的计算指令。
 3. `pmac` 的目的对象是读写操作数，执行前必须已有有效累加值。
 4. `pntt/pintt` 的数据对象在软件层面是读写对象。
 5. 不再使用的输入、常量、twiddle 和模上下文使用 `pfree` 释放。
 6. 输出使用 `dstore rel=1` 写回时，由 DMA 完成路径释放，之后不得再次 `pfree` 同一对象。
-7. 软件需要阶段完成边界时发出 `psync`。
+7. 一段完整 HPU 程序只在最后发出一次 `psync`，向 CPU 报告程序完成；组合算子的内部阶段不发出 `psync`。
 
 ## 2. 汇编语言约定
 
@@ -532,7 +532,7 @@ line 内 slot。Bank 5 共 32 line，但 8-bit `MOD_ID` 只能寻址前 16 line�
 所以生成器上限是 256 个 context。`pmodld` 不携带对象号，也不产生多项式
 结果；它改变后续模运算使用的 q/Barrett mu。
 
-模表的数据搬入与上下文选择是两个独立步骤。`dload type=2, flag[0]=1` 为模表逻辑对象建立 `ALLOC/V/busy/base/len` 状态，并请求 allocator 将物理 base 放到 Bank 5；随后的 `psync` 等待 DMA 完成。`pmodld` 只携带 `MOD_ID`，通过 cfg 读口访问模表并更新活动 q/mu。
+模表的数据搬入与上下文选择是两个独立步骤。`dload type=2, flag[0]=1` 为模表逻辑对象建立 `ALLOC/V/busy/base/len` 状态，并请求 allocator 将物理 base 放到 Bank 5。DMA 与 `pmodld` 之间的一致性由硬件维护，软件无需插入 `psync`；`pmodld` 只携带 `MOD_ID`，通过 cfg 读口访问模表并更新活动 q/mu。
 
 **示例**
 
@@ -569,7 +569,7 @@ pfree p4              # 0x8100000B
 
 对已经使用 `dstore rel=1` 释放的对象再次执行 `pfree` 属于非法生命周期操作。
 
-### 6.3 PSYNC - 同步边界
+### 6.3 PSYNC - 程序完成通知
 
 **语法**
 
@@ -580,11 +580,10 @@ psync
 **当前软件语义**
 
 ```text
-wait_until(inflight_count == 0)
-notify_software()
+notify_cpu(program_complete)
 ```
 
-`psync` 没有操作数。按照当前控制逻辑，它在队首等待统一 `inflight_cnt=0`，其中完成事件包括 `extmem_done_pulse`、`exec_done` 和 `cfg_done`。因此生成器在模表 dload 与首条 `pmodld` 之间发出 `psync`。
+`psync` 没有操作数。根据硬件负责人确认的软件使用约定，它只在一段完整 HPU 程序的最后发出一次，用于向 CPU 报告整个程序完成。DMA 与计算之间的依赖、顺序和可见性由硬件维护；生成器不得在模表 `dload` 与 `pmodld` 之间或任何算子内部阶段插入 `psync`。
 
 **示例**
 
@@ -691,7 +690,6 @@ HPU_MEM window 使用以下已冻结的 CSR 偏移：
 
 ```asm
 dload  x10, x11, p4, 2, 1  # allocate the mod-table object in small Bank 5
-psync                       # wait until the mod-table DMA is complete
 pmodld 0                   # activate q0 by MOD_ID
 dload  x12, x13, p0, 1, 0  # left polynomial
 dload  x14, x15, p1, 1, 0  # right polynomial
@@ -700,7 +698,7 @@ pfree  p0
 pfree  p1
 dstore x16, x17, p2, 1
 pfree  p4
-psync
+psync                       # final instruction: notify CPU of program completion
 ```
 
 ### 8.2 乘加累积

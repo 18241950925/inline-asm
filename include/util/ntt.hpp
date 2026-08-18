@@ -19,11 +19,11 @@ std::string generate_hpu_ntt_asm(
         int obj_poly,
         int twiddle_obj,
         int mod_ctx_obj,
-        bool append_psync = false);
+        bool append_psync = true);
 
 std::string generate_hpu_intt_asm(
         int N,
         int obj_poly,
         int twiddle_obj,
         int mod_ctx_obj,
-        bool append_psync = false);
+        bool append_psync = true);

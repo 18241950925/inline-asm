@@ -8,9 +8,9 @@ std::string generate_hpu_pmult_body_asm(
 
 std::string generate_hpu_pmult_asm(
     int num_q,
-    bool append_psync = false);
+    bool append_psync = true);
 
 std::string generate_hpu_pmult_ntt_asm(
     int N,
     int num_q,
-    bool append_psync = false);
+    bool append_psync = true);

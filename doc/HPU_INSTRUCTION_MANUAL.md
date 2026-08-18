@@ -17,7 +17,7 @@
 | 变换 | `pntt` | STG | `0100` | NTT stage，同一逻辑对象号 |
 | 变换 | `pintt` | STG | `0101` | INTT stage，同一逻辑对象号 |
 | 上下文 | `pmodld` | MOD | `0110` | 按 8-bit `MOD_ID` 激活固定模表项 |
-| 同步 | `psync` | SYNC | `0111` | 队列同步/完成通知 |
+| 通知 | `psync` | SYNC | `0111` | 程序末尾通知 CPU 执行完成 |
 | 生命周期 | `pfree` | CFG | `1000` | 释放对象槽位地址空间 |
 | 外部访存 | `dload` | DMA | - | 外存加载到对象槽位 |
 | 外部访存 | `dstore` | DMA | - | 对象槽位写回外存 |
@@ -76,7 +76,7 @@ line = MOD_TABLE_BASE_LINE + (mod_id >> 4)
 slot = mod_id & 0xF
 ```
 
-模表对象由 `dload type=2, flag[0]=1` 分配到 Bank 5，并在 DMA 后通过 `psync` 等待其有效。该对象仍具有 `ALLOC/V/busy/base/len` 状态，但对象号不编码进 `pmodld`。旧语法 `pmodld psrc, idx1, cfg` 不再接受。
+模表对象由 `dload type=2, flag[0]=1` 分配到 Bank 5。DMA 与后续 `pmodld` 的一致性由硬件维护，软件无需在两者之间插入 `psync`。该对象仍具有 `ALLOC/V/busy/base/len` 状态，但对象号不编码进 `pmodld`。旧语法 `pmodld psrc, idx1, cfg` 不再接受。
 
 ### `pfree`
 
@@ -86,13 +86,13 @@ pfree psrc
 
 `PSRC/OBJ_ID` 指定要释放的对象槽位，其余字段必须为 0。`pfree` 按队列顺序执行，应放在该对象最后一次读取之后。示例 `pfree p4` 的编码为 `0x8100000B`。
 
-## 5. SYNC 指令
+## 5. 程序完成通知指令
 
 ```asm
 psync
 ```
 
-`psync` 没有操作数，所有载荷位为 0。它在队首等待统一 inflight 域清空，可用于确保此前 DMA、计算和 cfg 操作完成；它不能代替对象生命周期管理。
+`psync` 没有操作数，所有载荷位为 0。软件只在一段完整 HPU 程序的最后发出一次，用于通知 CPU 整个程序已经完成。DMA 与计算之间的顺序、一致性和对象可见性由硬件维护，因此 `psync` 不用于等待 DMA，也不作为算子内部的阶段屏障；它同样不能代替对象生命周期管理。
 
 ## 6. custom1 DMA 指令
 

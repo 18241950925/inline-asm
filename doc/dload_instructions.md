@@ -15,7 +15,8 @@
   - `type = mod_ctx, small_bank = 1`：对象状态表仍以 `pobj` 维护 `ALLOC/V/busy/base/len`，allocator 使用 `flag[0]` 将其物理 base 分配到 small Bank 5。
   - `type = poly`：加载多项式/RNS 通道数据或预计算常量（如 twiddle、qhat_inv 等）。
 - 代码中 `x0` / `x_offset` / `x_c0` / `x_ct1_up` / `x_ct1_ntt` / `x_evk` / `x_out` / `x_tmp_c0` 等仅是占位地址寄存器名，测试时需用实际的 DMA/HBM 地址替代。
-- 模表 dload 后必须先执行 `psync`，再执行 `pmodld MOD_ID`。`pmodld` 不携带 `pobj`，而是按 MOD_ID 从 `mod_table_base_line` 选择上下文；模表物理顺序必须与 MOD_ID 一致。
+- 模表 dload 后可直接执行 `pmodld MOD_ID`，DMA 一致性与对象可见性由硬件维护，不需要软件插入 `psync`。`pmodld` 不携带 `pobj`，而是按 MOD_ID 从 `mod_table_base_line` 选择上下文；模表物理顺序必须与 MOD_ID 一致。
+- `psync` 仅在完整程序末尾发出一次，用于向 CPU 报告整个 HPU 程序完成；各算子 body 被组合时不得追加 `psync`。
 - `dload` 使目标逻辑对象进入 live 状态。生成器在只读输入、常量、twiddle和模表对象最后一次使用后发出 `pfree`；输出使用 `dstore rel=1` 时由 DMA 完成后释放，不再重复发出 `pfree`。
 - 当前 `SMALL_BANK_LINES=32`、`MOD_TABLE_BASE_LINE=0x1400`。每 line 容纳 16 个 context，物理容量为 512；受 8-bit `MOD_ID` 限制，软件最多生成 256 个 context。
 - NTT 在 stage 0 前必须加载 `pre_twist` 并显式 PMUL；INTT 在最终 stage 后必须加载 `post_untwist_scale` 并显式 PMUL。
@@ -32,7 +33,7 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 预处理阶段开头 | `POBJ_MOD_CTX` | **完整模表镜像**（输入 Q 与目标 P） | 使用 `type=2, small_bank=1` 分配到 Bank 5；同步后按 `MOD_ID` 选择 |
+| 预处理阶段开头 | `POBJ_MOD_CTX` | **完整模表镜像**（输入 Q 与目标 P） | 使用 `type=2, small_bank=1` 分配到 Bank 5；由硬件保证可见性，随后按 `MOD_ID` 选择 |
 | Stage 1: 每个 `q_j` | `POBJ_TMP_A` | `a_j`（输入多项式在 `q_j` 上的通道） | 注释中 `a_j` |
 | Stage 1: 每个 `q_j` | `POBJ_TMP_B` | `qhat_inv_j` | 用于 `a_j * qhat_inv_j mod q_j` |
 | Stage 2: 每个 `p_i`、每个 `q_j` | `POBJ_TMP_A` | `x_j`（Stage 1 输出的临时结果） | 注释中 `x_j` |

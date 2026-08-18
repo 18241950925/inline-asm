@@ -58,7 +58,6 @@ std::string generate_hpu_keyswitch_body_asm(
         asm_code << "        /* --- Step 2: NTT on Q and P bases --- */\n";
         asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                                hpu::DloadFlag::small_bank);
-        asm_code << hpu::psync();
 
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* NTT ctx_" << i << " */\n";
@@ -103,7 +102,6 @@ std::string generate_hpu_keyswitch_body_asm(
     const int POBJ_TMP_A2 = 0;
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX2, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
-    asm_code << hpu::psync();
     for (int v = 0; v < 2; ++v) {
         asm_code << "        /* INTT for out" << v << " */\n";
         for (int i = 0; i < total_bases; ++i) {
@@ -130,7 +128,6 @@ std::string generate_hpu_keyswitch_body_asm(
 
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX_S6, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
-    asm_code << hpu::psync();
     
     for (int i = 0; i < num_q; ++i) { // 降模后只有 num_q 个基了
         asm_code << hpu::pmodld(i); // 切换固定模表中的 MOD_ID
