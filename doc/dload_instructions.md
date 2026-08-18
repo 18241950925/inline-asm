@@ -23,6 +23,23 @@
 - 数学 golden 使用 little-endian `uint64`；`dload` 应使用 `test_data/hardware/` 下 little-endian `uint32`、按 256B line 补齐的独立镜像或完整 `hpu_mem_image.u32.bin`。
 - 每个 NTT/INTT stage twiddle 镜像固定包含 `N/2` 个 `uint32`，按 group-major butterfly 顺序排列；默认 `N=4096` 时为 32 line。
 
+### 目标槽位编号说明
+
+- 下文使用“源码变量名（实际槽位）”格式，例如 `POBJ_TMP_A (p0)`。`p0`才是汇编指令中编码的实际 `OBJ_ID`，变量名只用于解释语义。
+- 当前复合算子普遍复用以下编号：
+
+| 实际槽位 | 常见用途 | 说明 |
+| --- | --- | --- |
+| `p0` | 输入/工作对象 A | 密文分量、BConv 输入、NTT/INTT 数据对象 |
+| `p1` | 输入/工作对象 B | 预计算常量、EVK、第二输入 |
+| `p2` | 累加器/输出 | `pmul`/`pmac`/`padd` 的结果对象 |
+| `p3` | 复合算子的 twiddle | KeySwitch、Auto 和完整密文乘法内的 NTT/INTT 常量 |
+| `p4` | 模表逻辑对象 | `dload ..., p4, 2, 1`，由 allocator 放入 small Bank 5 |
+
+> 例外：独立 `output/ntt.asm` / `output/intt.asm` 由 `src/main.cpp`
+> 传入 `obj_poly=p0` 和 `twiddle_obj=p1`；上表的 `p3` 是它们被复合算子
+> 调用时的实际 twiddle 槽位。
+
 ---
 
 ## `generate_hpu_bconv_body_asm`
@@ -33,11 +50,14 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 预处理阶段开头 | `POBJ_MOD_CTX` | **完整模表镜像**（输入 Q 与目标 P） | 使用 `type=2, small_bank=1` 分配到 Bank 5；由硬件保证可见性，随后按 `MOD_ID` 选择 |
-| Stage 1: 每个 `q_j` | `POBJ_TMP_A` | `a_j`（输入多项式在 `q_j` 上的通道） | 注释中 `a_j` |
-| Stage 1: 每个 `q_j` | `POBJ_TMP_B` | `qhat_inv_j` | 用于 `a_j * qhat_inv_j mod q_j` |
-| Stage 2: 每个 `p_i`、每个 `q_j` | `POBJ_TMP_A` | `x_j`（Stage 1 输出的临时结果） | 注释中 `x_j` |
-| Stage 2: 每个 `p_i`、每个 `q_j` | `POBJ_TMP_B` | `qhat_modp_j_i` | 预计算常量 |
+| 预处理阶段开头 | `POBJ_MOD_CTX (p4)` | **完整模表镜像**（输入 Q 与目标 P） | 使用 `type=2, small_bank=1` 分配到 Bank 5；由硬件保证可见性，随后按 `MOD_ID` 选择 |
+| Stage 1: 每个 `q_j` | `POBJ_TMP_A (p0)` | `a_j`（输入多项式在 `q_j` 上的通道） | 注释中 `a_j` |
+| Stage 1: 每个 `q_j` | `POBJ_TMP_B (p1)` | `qhat_inv_j` | 用于 `a_j * qhat_inv_j mod q_j` |
+| Stage 2: 每个 `p_i`、每个 `q_j` | `POBJ_TMP_A (p0)` | `x_j`（Stage 1 输出的临时结果） | 注释中 `x_j` |
+| Stage 2: 每个 `p_i`、每个 `q_j` | `POBJ_TMP_B (p1)` | `qhat_modp_j_i` | 预计算常量 |
+
+Stage 2 的乘加结果保存在 `POBJ_ACC (p2)`，它不是 `dload`
+目标，而是 `pmul/pmac` 目标和随后的 `dstore` 源对象。
 
 > 备注：`generate_hpu_modup_body_asm` 直接复用 BConv 的 dload 语义。
 
@@ -50,6 +70,22 @@
 
 - 完全等同于 **BConv Q -> P** 的 dload 行为（见上节）。
 - 其中 `num_q_digit` 与 `q_offset` 控制输入基的“切片范围”。
+- 实际槽位与 BConv 相同：`p0`=输入/临时值，`p1`=预计算常量，
+  `p2`=累加输出，`p4`=模表。
+
+## `generate_hpu_hybrid_modup_body_asm`
+
+来源: [`src/poly/modup.cpp`](../src/poly/modup.cpp)
+
+Hybrid ModUp 用于 KeySwitch，把一个 Q digit 扩展成完整 `Q∪P`：
+
+| 位置 | 目标槽位 | 加载内容 | 说明 |
+| --- | --- | --- | --- |
+| BConv 之前，每个 source digit limb | 固定 `p0` | digit 中已有的 Q limb | `dload p0` 后立即 `dstore rel=1`，原样保留到完整基 workspace |
+| 后续 BConv | `POBJ_MOD_CTX (p4)` / `POBJ_TMP_A (p0)` / `POBJ_TMP_B (p1)` | 模表、source limb/临时值、预计算常量 | 目标基是 `Q\digit ∪ P` |
+
+`POBJ_ACC (p2)` 接收 BConv 累加结果。最终由原样保留的 digit limbs
+和 BConv 生成的 `Q\digit ∪ P` 共同组成完整 `Q∪P`。
 
 ---
 
@@ -67,10 +103,10 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| Stage 2 每个 `q_i` | `POBJ_MOD_CTX` | **完整 Q 模表镜像** | Bank 5 模表对象；`pmodld MOD_ID` 切换 `q_i` |
-| Stage 2 每个 `q_i` | `POBJ_Q` | `q` 基下的当前密文分量 | 被修正的输入 |
-| Stage 2 每个 `q_i` | `POBJ_CORR` | correction term（由 Stage 1 产生） | `q - corr` |
-| Stage 2 每个 `q_i` | `POBJ_P_INV` | `P^{-1} mod q_i` | 用于乘回缩放 |
+| Stage 2 开头（循环外仅一次） | `POBJ_MOD_CTX (p4)` | **完整 Q 模表镜像** | Bank 5 模表对象；后续 `pmodld MOD_ID` 切换 `q_i` |
+| Stage 2 每个 `q_i` | `POBJ_Q (p0)` | `q` 基下的当前密文分量 | 被修正的输入 |
+| Stage 2 每个 `q_i` | `POBJ_CORR (p1)` | correction term（由 Stage 1 产生） | `q - corr` |
+| Stage 2 每个 `q_i` | `POBJ_P_INV (p2)` | `P^{-1} mod q_i` | 用于乘回缩放 |
 
 ---
 
@@ -81,11 +117,13 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个 `q_i` | `POBJ_MOD_CTX` | **完整 Q 模表镜像** | Bank 5 模表对象；`pmodld MOD_ID` 选择 `q_i` |
-| 乘 `a0*b0` | `POBJ_A` / `POBJ_B` | `a0` / `b0` | 同一 `q_i` 基 |
-| 乘 `a1*b1` | `POBJ_A` / `POBJ_B` | `a1` / `b1` | 同一 `q_i` 基 |
-| 乘 `a0*b1` | `POBJ_A` / `POBJ_B` | `a0` / `b1` | 同一 `q_i` 基 |
-| 乘 `a1*b0` | `POBJ_A` / `POBJ_B` | `a1` / `b0` | 同一 `q_i` 基 |
+| 算子开头（循环外仅一次） | `POBJ_MOD_CTX (p4)` | **完整 Q 模表镜像** | Bank 5 模表对象；后续 `pmodld MOD_ID` 选择 `q_i` |
+| 乘 `a0*b0` | `POBJ_A (p0)` / `POBJ_B (p1)` | `a0` / `b0` | 同一 `q_i` 基 |
+| 乘 `a1*b1` | `POBJ_A (p0)` / `POBJ_B (p1)` | `a1` / `b1` | 同一 `q_i` 基 |
+| 乘 `a0*b1` | `POBJ_A (p0)` / `POBJ_B (p1)` | `a0` / `b1` | 同一 `q_i` 基 |
+| 乘 `a1*b0` | `POBJ_A (p0)` / `POBJ_B (p1)` | `a1` / `b0` | 同一 `q_i` 基 |
+
+三个乘法结果均使用 `POBJ_OUT (p2)` 作为计算目标和 `dstore` 源对象。
 
 ---
 
@@ -96,12 +134,13 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 开头 | `POBJ_MOD_CTX` | **完整 Q 模表镜像** | Bank 5 模表对象；`pmodld MOD_ID` 切换 `q_i` |
-| 每个 `q_i` 第一次 | `POBJ_CT` | `ct0`（第 0 分量） | 同一 `q_i` 基 |
-| 每个 `q_i` 第一次 | `POBJ_PT` | `pt`（明文多项式） | 同一 `q_i` 基 |
-| 每个 `q_i` 第二次 | `POBJ_CT` | `ct1`（第 1 分量） | 同一 `q_i` 基 |
+| 开头 | `POBJ_MOD_CTX (p4)` | **完整 Q 模表镜像** | Bank 5 模表对象；`pmodld MOD_ID` 切换 `q_i` |
+| 每个 `q_i` 第一次 | `POBJ_CT (p0)` | `ct0`（第 0 分量） | 同一 `q_i` 基 |
+| 每个 `q_i` 第一次 | `POBJ_PT (p1)` | `pt`（明文多项式） | 同一 `q_i` 基 |
+| 每个 `q_i` 第二次 | `POBJ_CT (p0)` | `ct1`（第 1 分量） | 同一 `q_i` 基 |
 
-> 注：`POBJ_PT` 只在第一次读取，若测试数据分开存放，需确保读指针一致或显式复用。
+> 注：`POBJ_PT (p1)` 只在第一次读取，两次乘法都将结果写到
+> `POBJ_OUT (p2)`。若测试数据分开存放，需确保读指针一致或显式复用。
 
 ---
 
@@ -112,9 +151,14 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个 stage | `twiddle_obj` | NTT/INTT twiddle 表 | 每个 stage 都会加载一次 |
+| NTT stage 0 之前 | `twiddle_obj`（独立生成为 `p1`；复合算子为 `p3`） | `pre_twist = psi^i` | 加载后执行显式 `pmul` |
+| NTT 每个 stage | `twiddle_obj`（独立 `p1`；复合算子 `p3`） | 当前 stage 的 NTT twiddle 表 | `stage=0..logN-1`，每个 stage 加载一次 |
+| INTT 每个 stage | `twiddle_obj`（独立 `p1`；复合算子 `p3`） | 当前 stage 的 INTT twiddle 表 | `stage=0..logN-1`，每个 stage 加载一次 |
+| INTT 最后一个 stage 之后 | `twiddle_obj`（独立 `p1`；复合算子 `p3`） | `post_untwist_scale = N^-1 * psi^-i` | 加载后执行显式 `pmul` |
 
-> 备注：第一个槽位是跨 stage 保持不变的**逻辑数据对象**，第二个槽位是 twiddle。控制器可以为数据对象重分配物理 base；函数内对模上下文只给出注释占位，实际 `mod_ctx` 需由调用方在外层加载。
+> 备注：`obj_poly`（当前调用均为 `p0`）是跨 stage 保持不变的
+> **逻辑数据对象**。控制器可以为它重分配物理 base；body 函数不加载
+> `mod_ctx`，由外层调用方加载（复合算子通常为 `p4`）。
 
 ---
 
@@ -123,31 +167,35 @@
 
 ### dload 映射（核心步骤）
 
-**Step 1: ModUp（Q -> P）**
+**Step 1: Hybrid ModUp（Q digit -> Q∪P）**
 
-- 复用 `generate_hpu_modup_body_asm` 的 dload 语义（见上文）。
+- 实际复用 `generate_hpu_hybrid_modup_body_asm`，将当前 Q digit 扩展到
+  完整 `Q∪P`。槽位为 `p0`=原始 digit limb/临时值，`p1`=预计算常量，
+  `p2`=BConv 累加输出，`p4`=模表（见 Hybrid ModUp 一节）。
 
 **Step 2: NTT on Q & P**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个基 | `POBJ_TMP_A` | `switching_component_up` 的当前基分片 | ModUp 输出的切片 |
-| 每个基 | `TWIDDLE` | NTT twiddle 表 | 供 `pntt` 使用 |
+| Step 2 开头 | `POBJ_MOD_CTX (p4)` | 完整 `Q∪P` 模表镜像 | 当前 digit 仅加载一次 |
+| 每个基 | `POBJ_TMP_A (p0)` | `switching_component_up` 的当前基分片 | Hybrid ModUp 输出的完整基分片 |
+| 每个基 | `TWIDDLE (p3)` | NTT `pre_twist` 和逐 stage twiddle 表 | 每个基共 `1+logN` 次 twiddle `dload` |
 
 **Step 3: Multiply with EVK**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个基、每个 `v` | `POBJ_CT` | `switching_component_ntt` 当前基分片 | NTT 后的切换分量 |
-| 每个基、每个 `v` | `POBJ_EVK` | `evk[v]` 当前基分片 | 评估密钥 |
-| 非首 digit | `POBJ_OUT` | 累加中间值 | 来自上一次 digit 结果 |
+| 每个基、每个 `v` | `POBJ_CT (p0)` | `switching_component_ntt` 当前基分片 | NTT 后的切换分量 |
+| 每个基、每个 `v` | `POBJ_EVK (p1)` | `evk[v]` 当前基分片 | 评估密钥 |
+| 非首 digit | `POBJ_OUT (p2)` | 累加中间值 | 来自上一次 digit 结果；首 digit 直接以 `p2` 作为 `pmul` 目标 |
 
 **Step 4: INTT on Q & P**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个基、每个 `v` | `POBJ_TMP_A2` | `out[v]` 当前基分片 | 乘加后的结果 |
-| 每个基、每个 `v` | `TWIDDLE2` | INTT twiddle 表 | 供 `pintt` 使用 |
+| Step 4 开头 | `POBJ_MOD_CTX2 (p4)` | 完整 `Q∪P` 模表镜像 | 两个 `v` 共用，仅加载一次 |
+| 每个基、每个 `v` | `POBJ_TMP_A2 (p0)` | `out[v]` 当前基分片 | 乘加后的结果 |
+| 每个基、每个 `v` | `TWIDDLE2 (p3)` | INTT 逐 stage twiddle 和 `post_untwist_scale` | 每个基共 `logN+1` 次 twiddle `dload` |
 
 **Step 5: ModDown**
 
@@ -157,10 +205,12 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个 `q_i` | `POBJ_OUT0` | `out0`（ModDown 后） | 当前基分片 |
-| 每个 `q_i` | `POBJ_BASE` | 不参与分解的 base 分量；普通 KeySwitch 中为 `c0` | 当前基分片 |
+| Step 6 开头 | `POBJ_MOD_CTX_S6 (p4)` | 完整 Q 模表镜像 | 循环外仅加载一次 |
+| 每个 `q_i` | `POBJ_OUT0 (p0)` | `out0`（ModDown 后） | 当前基分片 |
+| 每个 `q_i` | `POBJ_BASE (p1)` | 不参与分解的 base 分量；普通 KeySwitch 中为 `c0` | 当前基分片 |
 
-完整接口语义为 `KeySwitch(base, switching_component, evk) -> (base + ks0, ks1)`。
+加法结果保存到 `POBJ_FINAL_OUT0 (p2)` 并由 `dstore` 写回。完整接口语义为
+`KeySwitch(base, switching_component, evk) -> (base + ks0, ks1)`。
 
 ---
 
@@ -171,6 +221,16 @@
 `switching_component`，并使用 `rlk` 调用完整 KeySwitch。该调用先产生
 `(t0 + ks0, ks1)`；随后逐个 `q_i` 加载 `t1` 与 `ks1`，执行 `padd` 并写回
 第二输出分量，最终得到 `(t0 + ks0, t1 + ks1)`。
+
+最终第二分量合并的实际槽位为：
+
+| 位置 | 目标槽位 | 加载内容 |
+| --- | --- | --- |
+| 合并开头 | `POBJ_MOD_CTX (p4)` | 完整 Q 模表镜像，仅加载一次 |
+| 每个 `q_i` | `POBJ_T1 (p0)` | `t1` 当前 Q limb |
+| 每个 `q_i` | `POBJ_KS1 (p1)` | KeySwitch 生成的 `ks1` 当前 Q limb |
+
+`padd` 将结果写到 `POBJ_OUT1 (p2)`，随后以 `dstore rel=1` 导出。
 
 ---
 
@@ -189,13 +249,13 @@
 
 | 阶段 | 加载内容 | 存储内容 |
 | --- | --- | --- |
-| 输入 NTT | `ct_a_q`、`ct_b_q`、Q 模上下文、NTT twiddle | 两个密文的 NTT 域分量 |
-| 张量积 | NTT 域 `a0/a1/b0/b1` | NTT 域 `t0/t1/t2` |
-| 张量积 INTT | `t0/t1/t2`、Q 模上下文、INTT twiddle | 系数域 `t0/t1/t2` |
-| digit ModUp/NTT | `t2` digit、Q∪P 模上下文、BConv 常量、twiddle | Q∪P 上的 digit NTT |
-| EVK 乘加 | digit NTT、`relinearization_key_ntt_qp`、累加中间值 | Q∪P 上两个 key-switch 分量 |
-| INTT/ModDown | 两个累加分量、Q∪P 常量与 twiddle | Q 基 key-switch correction |
-| 最终合并 | `t0/t1` 与两个 correction | `ciphertext_out_q` |
+| 输入 NTT | `p0`=`ct_a_q/ct_b_q` 当前 limb，`p3`=NTT twiddle，`p4`=Q 模表 | 两个密文的 NTT 域分量（从 `p0` dstore） |
+| 张量积 | `p0/p1`=NTT 域 `a0/a1` 与 `b0/b1`，`p4`=Q 模表 | `p2`=NTT 域 `t0/t1/t2` |
+| 张量 INTT | `p0`=`t0/t1/t2`，`p3`=INTT twiddle，`p4`=Q 模表 | 系数域 `t0/t1/t2`（从 `p0` dstore） |
+| digit Hybrid ModUp/NTT | `p0/p1`=digit/BConv 常量，`p3`=twiddle，`p4`=Q∪P 模表 | `p2`=BConv 结果，随后 `p0`=Q∪P 上的 digit NTT |
+| EVK 乘加 | `p0`=digit NTT，`p1`=`relinearization_key_ntt_qp`，非首 digit 另加载 `p2`=累加值 | `p2`=Q∪P 上两个 key-switch 分量 |
+| INTT/ModDown | `p0/p1`=累加分量/基转换常量，`p2`=临时输出，`p3`=twiddle，`p4`=模表 | Q 基 key-switch correction |
+| 最终合并 | 第一分量：`p0`=`ks0 correction`、`p1`=`t0`；第二分量：`p0`=`t1`、`p1`=`ks1`；`p4`=Q 模表 | `p2`=`ciphertext_out_q` 当前 limb |
 
 Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphertext_multiply/test_data/artifact_manifest.csv`；硬件 `uint32` 文件、checksum、line offset/count 分别见 `hardware/hardware_manifest.csv` 和 `hardware/line_map.csv`。当前生成器中的 `dload("x0", "x0", ...)` / `dstore("x0", "x0", ...)` 只表达数据依赖与计算顺序，尚未把这些 line 参数写入物理寄存器。
 
@@ -206,39 +266,49 @@ Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphe
 
 ### dload 映射（核心步骤）
 
-**Step 0: c0 的 NTT -> iNTT_auto**
+> **当前实现限制：** `auto_idx` 尚未参与 NTT/INTT 指令或 twiddle DMA
+> 地址的生成。因此下表按“当前实际发出的 dload”记录；`p3` 目前加载的
+> 是普通 NTT/INTT twiddle，不应解释为已实现的 automorphism 专用表。
+
+**Step 0: c0 的 NTT -> INTT（实现尚未使用 `auto_idx`）**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个 `q_i` | `SLOT_A` | `c0` 当前基分片 | 来自 `x_c0/x_offset` |
-| 每个 `q_i` | `TWIDDLE` | NTT twiddle 表 | NTT 使用 |
-| 每个 `q_i` | `TWIDDLE` | 融合 auto 的 iNTT twiddle | iNTT 使用 |
+| Step 0 开头 | `POBJ_MOD_CTX (p4)` | 完整 Q 模表镜像 | 循环外仅加载一次 |
+| 每个 `q_i` | `SLOT_A (p0)` | `c0` 当前基分片 | 来自 `x_c0/x_offset` |
+| 每个 `q_i` | `TWIDDLE (p3)` | NTT `pre_twist` 和逐 stage twiddle | 当前为普通 NTT |
+| 每个 `q_i` | `TWIDDLE (p3)` | INTT 逐 stage twiddle 和 `post_untwist_scale` | 当前为普通 INTT，未融合 `auto_idx` |
 
 **Step 1: ModUp**
 
 - 复用 `generate_hpu_modup_body_asm` 的 dload 语义（见上文）。
+- 槽位为 `p0`=输入/临时值，`p1`=预计算常量，`p2`=BConv 累加输出，
+  `p4`=模表。注意：当前这里调用的是普通 ModUp，它不会像 Hybrid ModUp
+  一样保留 source digit 并补齐完整 `Q∪P`；因此与后续全基遍历尚未闭环。
 
-**Step 2: Fused NTT Auto**
+**Step 2: NTT（注释称 Fused NTT Auto，但实现尚未使用 `auto_idx`）**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个基 | `SLOT_A` | `ct1_up` 当前基分片 | ModUp 输出 |
-| 每个基 | `TWIDDLE` | NTT twiddle 表 | 融合 auto 的 NTT |
+| 当前 digit 的 Step 2 开头 | `POBJ_MOD_CTX (p4)` | 完整 `Q∪P` 模表镜像 | 循环外仅加载一次 |
+| 每个基 | `SLOT_A (p0)` | `ct1_up` 当前基分片 | 代码按完整 `Q∪P` 遍历，但普通 ModUp 尚未产生所有这些分片 |
+| 每个基 | `TWIDDLE (p3)` | NTT `pre_twist` 和逐 stage twiddle | 当前是普通 NTT，未融合 `auto_idx` |
 
 **Step 3: Multiply & Accumulate with EVK**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个基、每个 `v` | `SLOT_A` | `ct1_ntt` 当前基分片 | NTT 后 ct1 |
-| 每个基、每个 `v` | `SLOT_B` | `evk[v]` 当前基分片 | 评估密钥 |
-| 非首 digit | `SLOT_C` | 先前累加值 | 来自 `x_out` |
+| 每个基、每个 `v` | `SLOT_A (p0)` | `ct1_ntt` 当前基分片 | NTT 后 ct1 |
+| 每个基、每个 `v` | `SLOT_B (p1)` | `evk[v]` 当前基分片 | 评估密钥 |
+| 非首 digit | `SLOT_C (p2)` | 先前累加值 | 来自 `x_out`；首 digit 直接以 `p2` 作为 `pmul` 目标 |
 
 **Step 4: INTT**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个基、每个 `v` | `SLOT_A` | `out[v]` 当前基分片 | 乘加后的结果 |
-| 每个基、每个 `v` | `TWIDDLE` | INTT twiddle 表 | 供 iNTT 使用 |
+| Step 4 开头 | `POBJ_MOD_CTX (p4)` | 完整 `Q∪P` 模表镜像 | 两个 `v` 共用，仅加载一次 |
+| 每个基、每个 `v` | `SLOT_A (p0)` | `out[v]` 当前基分片 | 乘加后的结果 |
+| 每个基、每个 `v` | `TWIDDLE (p3)` | INTT 逐 stage twiddle 和 `post_untwist_scale` | 供普通 INTT 使用 |
 
 **Step 5: ModDown**
 
@@ -248,11 +318,16 @@ Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphe
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个 `q_i` | `SLOT_A` | `out0`（ModDown 后） | 当前基分片 |
-| 每个 `q_i` | `SLOT_B` | `c0_auto`（Step 0 暂存） | 来自 `x_tmp_c0` |
+| Step 6 开头 | `POBJ_MOD_CTX (p4)` | 完整 Q 模表镜像 | 循环外仅加载一次 |
+| 每个 `q_i` | `SLOT_A (p0)` | `out0`（ModDown 后） | 当前基分片 |
+| 每个 `q_i` | `SLOT_B (p1)` | Step 0 暂存的 `c0` | 来自 `x_tmp_c0`；当前实现尚不能将它视为正确的 `c0_auto` |
+
+`padd` 将合并结果写到 `SLOT_C (p2)`，随后以 `dstore rel=1` 导出。
 
 ---
 
 ## 未显式包含 dload 的算子
 
 - `generate_hpu_mm_body_asm` 仅执行 `pmul`，无 `dload`（见 [`src/util/mm.cpp`](../src/util/mm.cpp)）。
+- 注意这里指的是 body 函数；完整 `generate_hpu_mm_asm` 会额外把模表加载到
+  调用方指定的 `mod_ctx_obj`（当前独立 `output/mm.cpp` 为 `p3`）。
