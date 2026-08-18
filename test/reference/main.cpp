@@ -1358,11 +1358,33 @@ void generate(const std::filesystem::path& output_root,
         keyswitch_q[component] = moddown(keyswitch_qp[component], q_moduli, p_moduli);
     }
 
+    Ciphertext keyswitch_output;
     Ciphertext output;
     for (std::size_t basis = 0; basis < kNumQ; ++basis) {
-        output[0].push_back(add_poly(tensor[0][basis], keyswitch_q[0][basis], q_moduli[basis]));
+        keyswitch_output[0].push_back(
+            add_poly(tensor[0][basis], keyswitch_q[0][basis], q_moduli[basis]));
+        keyswitch_output[1].push_back(keyswitch_q[1][basis]);
+        output[0].push_back(keyswitch_output[0][basis]);
         output[1].push_back(add_poly(tensor[1][basis], keyswitch_q[1][basis], q_moduli[basis]));
     }
+
+    BasisPoly keyswitch_expected(kNumQ);
+    for (std::size_t basis = 0; basis < kNumQ; ++basis) {
+        keyswitch_expected[basis] = add_poly(
+            tensor[0][basis],
+            negacyclic_mul(
+                tensor[2][basis],
+                secret_squared_qp[basis],
+                q_moduli[basis],
+                q_roots[basis]),
+            q_moduli[basis]);
+    }
+    const BasisPoly keyswitch_output_decrypted = decrypt_ciphertext(
+        keyswitch_output, secret_q, q_moduli, q_roots);
+    verify_equal(
+        keyswitch_expected,
+        keyswitch_output_decrypted,
+        "complete key-switch output decryption");
 
     const BasisPoly tensor_decrypted = decrypt_tensor(tensor, secret_q, q_moduli, q_roots);
     const BasisPoly output_decrypted = decrypt_ciphertext(output, secret_q, q_moduli, q_roots);
@@ -1662,21 +1684,46 @@ void generate(const std::filesystem::path& output_root,
                            all_moduli, all_roots);
 
         case_artifacts.clear();
+        words.clear(); append_words(words, tensor[0]);
+        add_artifact(case_artifacts, "input_base_q.bin", "KeySwitch base component t0",
+                     {kNumQ, kN}, std::move(words), {"basis_q", "coefficient"});
         words.clear(); append_words(words, tensor[2]);
-        add_artifact(case_artifacts, "input_t2_q.bin", "tensor component t2",
+        add_artifact(case_artifacts, "input_t2_q.bin", "KeySwitch switching component t2",
                      {kNumQ, kN}, std::move(words), {"basis_q", "coefficient"});
         words.clear();
         for (const auto& digit : rlk_ntt) { append_words(words, digit[0]); append_words(words, digit[1]); }
         add_artifact(case_artifacts, "rlk_ntt_qp.bin", "relinearization key",
                      {kDnum, 2, kNumQ + kNumP, kN}, std::move(words),
                      {"digit", "component[ks0,ks1]", "basis_q_then_p", "coefficient"});
-        words.clear(); append_words(words, keyswitch_q[0]); append_words(words, keyswitch_q[1]);
-        add_artifact(case_artifacts, "expected_q.bin", "KeySwitch(t2) components",
+        words.clear(); append_words(words, keyswitch_output[0]); append_words(words, keyswitch_output[1]);
+        add_artifact(case_artifacts, "expected_q.bin", "KeySwitch(t0, t2) output",
                      {2, kNumQ, kN}, std::move(words),
-                     {"component[ks0,ks1]", "basis_q", "coefficient"});
+                     {"component[t0_plus_ks0,ks1]", "basis_q", "coefficient"});
         write_case_package(*suite_root, "keyswitch",
-                           common_params("keyswitch", "coefficient/Q + rlk/NTT/QP",
+                           common_params("keyswitch", "base/Q + switching_component/Q + rlk/NTT/QP",
                                          "coefficient/Q", all_moduli),
+                           std::move(case_artifacts),
+                           all_moduli, all_roots);
+
+        case_artifacts.clear();
+        words.clear();
+        for (const BasisPoly& component : tensor) append_words(words, component);
+        add_artifact(case_artifacts, "input_tensor_q.bin", "tensor ciphertext t0,t1,t2",
+                     {3, kNumQ, kN}, std::move(words),
+                     {"tensor_component[t0,t1,t2]", "basis_q", "coefficient"});
+        words.clear();
+        for (const auto& digit : rlk_ntt) { append_words(words, digit[0]); append_words(words, digit[1]); }
+        add_artifact(case_artifacts, "rlk_ntt_qp.bin", "relinearization key",
+                     {kDnum, 2, kNumQ + kNumP, kN}, std::move(words),
+                     {"digit", "component[ks0,ks1]", "basis_q_then_p", "coefficient"});
+        words.clear(); append_words(words, output[0]); append_words(words, output[1]);
+        add_artifact(case_artifacts, "expected_q.bin", "relinearized ciphertext",
+                     {2, kNumQ, kN}, std::move(words),
+                     {"component[t0_plus_ks0,t1_plus_ks1]", "basis_q", "coefficient"});
+        write_case_package(*suite_root, "relinearization",
+                           common_params("relinearization",
+                                         "tensor/coefficient/Q + rlk/NTT/QP",
+                                         "ciphertext/coefficient/Q", all_moduli),
                            std::move(case_artifacts),
                            all_moduli, all_roots);
 

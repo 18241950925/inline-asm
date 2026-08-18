@@ -20,6 +20,7 @@ const std::vector<std::string> kEncodableOutputs{
     "modup",
     "moddown",
     "keyswitch",
+    "relinearization",
     "ciphertext_multiply",
 };
 
@@ -34,6 +35,7 @@ const std::vector<std::string> kAllOutputs{
     "moddown",
     "auto",
     "keyswitch",
+    "relinearization",
     "ciphertext_multiply",
 };
 

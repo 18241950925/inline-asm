@@ -12,6 +12,7 @@
 #include "poly/modup.hpp"
 #include "poly/pmult.hpp"
 #include "operator/keyswitch.hpp"
+#include "operator/relinearization.hpp"
 #include "operator/ciphertext_multiply.hpp"
 
 namespace {
@@ -338,6 +339,31 @@ void test_keyswitch_codegen()
 	}
 }
 
+void test_relinearization_codegen()
+{
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::string relinearization = generate_hpu_relinearization_asm(
+			kCiphertextMultiplyCfg.N,
+			kCiphertextMultiplyCfg.num_q,
+			kCiphertextMultiplyCfg.num_p,
+			kCiphertextMultiplyCfg.dnum,
+			true);
+		std::ofstream("output/relinearization.cpp") << relinearization;
+		std::cout << "Saved relinearization ASM to output/relinearization.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::string relinearization_body = generate_hpu_relinearization_body_asm(
+			kCiphertextMultiplyCfg.N,
+			kCiphertextMultiplyCfg.num_q,
+			kCiphertextMultiplyCfg.num_p,
+			kCiphertextMultiplyCfg.dnum,
+			true);
+		std::ofstream("output/relinearization.asm") << relinearization_body;
+		std::cout << "Saved relinearization body ASM to output/relinearization.asm\n";
+	}
+}
+
 void test_ciphertext_multiply_codegen()
 {
 	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
@@ -391,6 +417,7 @@ int main(int argc, char* argv[])
 	test_moddown_codegen();
 	test_auto_codegen();
 	test_keyswitch_codegen();
+	test_relinearization_codegen();
 	test_ciphertext_multiply_codegen();
 	return 0;
 }

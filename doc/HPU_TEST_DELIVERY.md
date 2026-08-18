@@ -52,7 +52,7 @@ HARDWARE_EXECUTION=CONDITIONAL
 
 当前存在两组需要保持一致的源配置：
 
-- `src/main.cpp`：HPU 指令生成参数，完整乘法和 KeySwitch 复用 `kCiphertextMultiplyCfg`。
+- `src/main.cpp`：HPU 指令生成参数，完整乘法、Relinearization 和 KeySwitch 复用 `kCiphertextMultiplyCfg`。
 - `test/reference/main.cpp`：软件 reference 参数 `kN/kNumQ/kNumP/kDnum/kPlainModulus/kSeed`。
 
 `outputs/*/test_data/params.json` 是 reference 写出的结果清单，不是配置入口。修改它不会影响生成逻辑，并会在下一次执行 `hpu_delivery` 时被覆盖。
@@ -140,7 +140,7 @@ group-major butterfly 顺序展开为固定 `N/2` 个 `uint32`，即 `N/128` 条
 | `ciphertext_out_q` | 最终 `padd`、输出 component 顺序 |
 | 最终解密 | 上述节点均通过时再检查方案参数和 host 数据解释 |
 
-同一 reference 还会拆分到 `outputs/{ntt,intt,mm,bconv,modup,pmult,cmult,moddown,keyswitch}/test_data/`。每个目录均包含独立 `params.json`、数学输入/期望输出、checksum，以及完整的 `hardware/` 镜像、上下文、twiddle 和 line map，可直接交给对应模块负责人跑 UT。`auto` 当前无法完成物理寄存器编码，其阻塞原因记录在 `outputs/auto/test_data/STATUS.md`。
+同一 reference 还会拆分到 `outputs/{ntt,intt,mm,bconv,modup,pmult,cmult,moddown,keyswitch,relinearization}/test_data/`。每个目录均包含独立 `params.json`、数学输入/期望输出、checksum，以及完整的 `hardware/` 镜像、上下文、twiddle 和 line map，可直接交给对应模块负责人跑 UT。`auto` 当前无法完成物理寄存器编码，其阻塞原因记录在 `outputs/auto/test_data/STATUS.md`。
 
 ## 6. RV 接口用例
 

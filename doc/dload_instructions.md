@@ -131,14 +131,14 @@
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个基 | `POBJ_TMP_A` | `ct1_up` 的当前基分片 | ModUp 输出的切片 |
+| 每个基 | `POBJ_TMP_A` | `switching_component_up` 的当前基分片 | ModUp 输出的切片 |
 | 每个基 | `TWIDDLE` | NTT twiddle 表 | 供 `pntt` 使用 |
 
 **Step 3: Multiply with EVK**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个基、每个 `v` | `POBJ_CT` | `ct1_ntt` 当前基分片 | NTT 后的 ct1 |
+| 每个基、每个 `v` | `POBJ_CT` | `switching_component_ntt` 当前基分片 | NTT 后的切换分量 |
 | 每个基、每个 `v` | `POBJ_EVK` | `evk[v]` 当前基分片 | 评估密钥 |
 | 非首 digit | `POBJ_OUT` | 累加中间值 | 来自上一次 digit 结果 |
 
@@ -153,12 +153,24 @@
 
 - 复用 `generate_hpu_moddown_body_asm` 的 dload 语义（见上文）。
 
-**Step 6: Add c0 to out0**
+**Step 6: Add base to out0**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
 | 每个 `q_i` | `POBJ_OUT0` | `out0`（ModDown 后） | 当前基分片 |
-| 每个 `q_i` | `POBJ_C0` | 原始 `c0` 分量 | 当前基分片 |
+| 每个 `q_i` | `POBJ_BASE` | 不参与分解的 base 分量；普通 KeySwitch 中为 `c0` | 当前基分片 |
+
+完整接口语义为 `KeySwitch(base, switching_component, evk) -> (base + ks0, ks1)`。
+
+---
+
+## `generate_hpu_relinearization_body_asm`
+来源: [`src/operator/relinearization.cpp`](../src/operator/relinearization.cpp)
+
+重线性化将 `t0` 绑定为 KeySwitch 的 `base`，将 `t2` 绑定为
+`switching_component`，并使用 `rlk` 调用完整 KeySwitch。该调用先产生
+`(t0 + ks0, ks1)`；随后逐个 `q_i` 加载 `t1` 与 `ks1`，执行 `padd` 并写回
+第二输出分量，最终得到 `(t0 + ks0, t1 + ks1)`。
 
 ---
 
@@ -170,9 +182,8 @@
 1. 对两个输入密文的 `c0/c1` 分量执行 NTT。
 2. 在每个 `q_i` 上计算 `t0=a0*b0`、`t1=a0*b1+a1*b0`、`t2=a1*b1`。
 3. 将 `t0/t1/t2` 执行 INTT，得到 Q 基系数域三分量密文。
-4. 按 digit 分解 `t2`，执行 Q -> Q∪P 的 ModUp 和 NTT。
-5. 与重线性化密钥两个分量逐点乘并跨 digit 累加，再执行 INTT 和 Q∪P -> Q ModDown。
-6. 将 key-switch 结果分别加到 `t0/t1`，输出重新线性化后的二分量密文。
+4. 调用 `generate_hpu_relinearization_body_asm`：以 `t0` 为 base 对 `t2` 执行完整 KeySwitch。
+5. Relinearization 再计算 `t1 + ks1`，输出重新线性化后的二分量密文。
 
 ### 主要 dload/dstore 数据
 

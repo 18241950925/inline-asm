@@ -41,6 +41,7 @@ std::string generate_hpu_keyswitch_body_asm(
     const int TWIDDLE = 3;
     const int POBJ_TMP_A = 0;
 
+    asm_code << "        /* KEYSWITCH BODY: (base, switching_component) -> (base + ks0, ks1) */\n";
     asm_code << "        /* --- Decomposed digits loop (dnum = " << dnum << ") --- */\n";
     for (int d = 0; d < dnum; ++d) {
         int q_offset = d * digit_size;
@@ -121,10 +122,10 @@ std::string generate_hpu_keyswitch_body_asm(
         asm_code << "        /* ModDown for out" << v << " */\n";
         asm_code << generate_hpu_moddown_body_asm(num_q, num_p, false);
     }
-    asm_code << "        /* --- Step 6: Add c0 to out0 --- */\n";
+    asm_code << "        /* --- Step 6: Add base component to out0 --- */\n";
     const int POBJ_MOD_CTX_S6 = 4;
     const int POBJ_OUT0 = 0;
-    const int POBJ_C0 = 1;
+    const int POBJ_BASE = 1;
     const int POBJ_FINAL_OUT0 = 2;
 
     asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX_S6, hpu::DataType::mod_ctx,
@@ -134,12 +135,12 @@ std::string generate_hpu_keyswitch_body_asm(
         asm_code << hpu::pmodld(i); // 切换固定模表中的 MOD_ID
         // 1. 加载刚才 ModDown 生成的 out0
         asm_code << hpu::dload("x0", "x0", POBJ_OUT0, hpu::DataType::poly);
-        // 2. 加载原始密文的 c0 分量
-        asm_code << hpu::dload("x0", "x0", POBJ_C0, hpu::DataType::poly); 
+        // 2. 加载不参与分解、需要并入第一输出分量的 base（普通 KeySwitch 为 c0）
+        asm_code << hpu::dload("x0", "x0", POBJ_BASE, hpu::DataType::poly);
         // 3. 在片上直接相加
-        asm_code << hpu::padd(POBJ_FINAL_OUT0, POBJ_OUT0, POBJ_C0);
+        asm_code << hpu::padd(POBJ_FINAL_OUT0, POBJ_OUT0, POBJ_BASE);
         asm_code << hpu::pfree(POBJ_OUT0);
-        asm_code << hpu::pfree(POBJ_C0);
+        asm_code << hpu::pfree(POBJ_BASE);
         // 4. 写回主存
         asm_code << hpu::dstore("x0", "x0", POBJ_FINAL_OUT0, 1);
     }
@@ -171,7 +172,7 @@ std::string generate_hpu_keyswitch_asm(
     }
 
     asm_code << "    __asm__ volatile(\n";
-    asm_code << "        /* KEYSWITCH: ModUp -> NTT -> Mult -> INTT -> ModDown */\n";
+    asm_code << "        /* KEYSWITCH: (base, switching_component) -> (base + ks0, ks1) */\n";
 
     asm_code << generate_hpu_keyswitch_body_asm(N, num_q, num_p, dnum, append_psync);
 

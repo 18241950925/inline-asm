@@ -4,6 +4,10 @@ endif()
 
 set(REQUIRED_FILES
     "output/ciphertext_multiply.asm"
+    "output/relinearization.asm"
+    "outputs/relinearization/relinearization.inst32"
+    "outputs/relinearization/relinearization.cmd26"
+    "outputs/relinearization/test_data/expected_q.bin"
     "outputs/ciphertext_multiply/ciphertext_multiply.inst32"
     "outputs/ciphertext_multiply/ciphertext_multiply.cmd26"
     "outputs/ciphertext_multiply/test_data/params.json"
@@ -37,7 +41,7 @@ set(REQUIRED_FILES
     "outputs/intt/test_data/expected.hex.txt"
 )
 
-foreach(CASE_NAME ntt intt mm bconv modup pmult cmult moddown keyswitch)
+foreach(CASE_NAME ntt intt mm bconv modup pmult cmult moddown keyswitch relinearization)
     list(APPEND REQUIRED_FILES
         "outputs/${CASE_NAME}/test_data/params.json"
         "outputs/${CASE_NAME}/test_data/artifact_manifest.csv"
@@ -174,6 +178,7 @@ foreach(DIRECTION ntt intt)
 endforeach()
 
 file(READ "${ROOT}/output/ciphertext_multiply.asm" CIPHERTEXT_ASM)
+file(READ "${ROOT}/output/relinearization.asm" RELINEARIZATION_ASM)
 foreach(MARKER
         "Tensor product in NTT domain"
         "HYBRID MODUP: Q_digit -> full Q union P"
@@ -185,6 +190,28 @@ foreach(MARKER
         message(FATAL_ERROR "Missing ciphertext multiply stage marker: ${MARKER}")
     endif()
 endforeach()
+
+foreach(MARKER
+        "KeySwitch(base=t0, switching_component=t2)"
+        "Step 6: Add base component to out0"
+        "Relinearization final merge: out1 = t1 + ks1")
+    string(FIND "${RELINEARIZATION_ASM}" "${MARKER}" POSITION)
+    if(POSITION EQUAL -1)
+        message(FATAL_ERROR "Missing relinearization composition marker: ${MARKER}")
+    endif()
+endforeach()
+
+file(READ "${ROOT}/src/operator/ciphertext_multiply.cpp" CIPHERTEXT_SOURCE)
+string(FIND "${CIPHERTEXT_SOURCE}"
+    "generate_hpu_relinearization_body_asm" SHARED_RELINEARIZATION_POSITION)
+if(SHARED_RELINEARIZATION_POSITION EQUAL -1)
+    message(FATAL_ERROR "Ciphertext multiply does not call the shared relinearization generator")
+endif()
+string(FIND "${CIPHERTEXT_SOURCE}"
+    "generate_relinearize_t2_body_asm" LEGACY_RELINEARIZATION_POSITION)
+if(NOT LEGACY_RELINEARIZATION_POSITION EQUAL -1)
+    message(FATAL_ERROR "Ciphertext multiply still contains the legacy relinearization generator")
+endif()
 
 file(READ "${ROOT}/output/ntt.asm" NTT_ASM)
 string(FIND "${NTT_ASM}" "Negacyclic pre-twist: explicit PMUL" NTT_PRE_TWIST_POSITION)
@@ -274,7 +301,7 @@ function(CHECK_OBJECT_LIFECYCLE RELATIVE_PATH)
     endforeach()
 endfunction()
 
-foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch ciphertext_multiply)
+foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
     CHECK_OBJECT_LIFECYCLE("output/${CASE_NAME}.asm")
 endforeach()
 
@@ -290,7 +317,7 @@ function(CHECK_MOD_CONTEXT_LOAD RELATIVE_PATH)
     endforeach()
 endfunction()
 
-foreach(CASE_NAME ntt intt bconv pmult cmult modup moddown auto keyswitch ciphertext_multiply)
+foreach(CASE_NAME ntt intt bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
     CHECK_MOD_CONTEXT_LOAD("output/${CASE_NAME}.asm")
 endforeach()
 
@@ -316,7 +343,7 @@ function(CHECK_TERMINAL_PSYNC RELATIVE_PATH)
     endif()
 endfunction()
 
-foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch ciphertext_multiply)
+foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
     CHECK_TERMINAL_PSYNC("output/${CASE_NAME}.asm")
     CHECK_TERMINAL_PSYNC("output/${CASE_NAME}.cpp")
 endforeach()
@@ -331,6 +358,24 @@ file(STRINGS "${ROOT}/outputs/ciphertext_multiply/ciphertext_multiply.cmd26" CMD
 list(LENGTH CMD26_LINES CMD26_COUNT)
 if(NOT CMD26_COUNT EQUAL INST32_COUNT)
     message(FATAL_ERROR "32-bit instruction and 26-bit precode counts differ")
+endif()
+
+file(STRINGS "${ROOT}/outputs/relinearization/relinearization.inst32" RELIN_INST32_LINES)
+list(LENGTH RELIN_INST32_LINES RELIN_INST32_COUNT)
+if(RELIN_INST32_COUNT LESS 1000)
+    message(FATAL_ERROR "Relinearization instruction stream is unexpectedly short")
+endif()
+file(STRINGS "${ROOT}/outputs/relinearization/relinearization.cmd26" RELIN_CMD26_LINES)
+list(LENGTH RELIN_CMD26_LINES RELIN_CMD26_COUNT)
+if(NOT RELIN_CMD26_COUNT EQUAL RELIN_INST32_COUNT)
+    message(FATAL_ERROR "Relinearization 32-bit instruction and 26-bit precode counts differ")
+endif()
+
+file(SHA256 "${ROOT}/outputs/relinearization/test_data/expected_q.bin" RELIN_EXPECTED_HASH)
+file(SHA256 "${ROOT}/outputs/ciphertext_multiply/test_data/expected/ciphertext_out_q.bin"
+    CIPHERTEXT_EXPECTED_HASH)
+if(NOT RELIN_EXPECTED_HASH STREQUAL CIPHERTEXT_EXPECTED_HASH)
+    message(FATAL_ERROR "Standalone relinearization output differs from ciphertext multiply output")
 endif()
 
 file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
@@ -354,6 +399,8 @@ file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "STAGE_TWIDDLE_LAYOUT=PASS\n"
     "NEGACYCLIC_FACTORS_EXPLICIT=PASS\n"
     "NTT_PHYSICAL_OUT_OF_PLACE=PASS\n"
+    "RELINEARIZATION_REUSES_KEYSWITCH=PASS\n"
+    "RELINEARIZATION_INST32_COUNT=${RELIN_INST32_COUNT}\n"
     "CIPHERTEXT_MULTIPLY_INST32_COUNT=${INST32_COUNT}\n"
     "HARDWARE_EXECUTION=CONDITIONAL\n"
     "PENDING=DMA instruction relocation/GPR loading, scratch map, runtime cache/fault/terminal-psync handling\n")

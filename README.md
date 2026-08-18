@@ -21,8 +21,9 @@
 
 ### 3) 高级算子层 (`operator`)
 拼装多项式级与基础工具算子，完整实现核心同态运算：
-- **`operator/keyswitch.hpp/cpp`**：完整密钥切换 (KeySwitch) 逻辑生成，包含切片循环（密文分解，由参数 `dnum` 控制）、ModUp、多基 NTT、与 Evk (评估密钥) 点乘累加、INTT、以及 ModDown 缩放累加操作的全工作流流水线。
-- **`operator/ciphertext_multiply.hpp/cpp`**：完整密文乘法生成，执行输入分量 NTT、`cmult` 三分量张量积、INTT、对 $t_2$ 的重线性化/KeySwitch，以及最终 $(out_0,out_1)$ 合成。
+- **`operator/keyswitch.hpp/cpp`**：完整密钥切换 (KeySwitch) 逻辑生成，语义为 `KeySwitch(base, switching_component, evk) -> (base + ks0, ks1)`。
+- **`operator/relinearization.hpp/cpp`**：重线性化算子，以 `t0` 为 KeySwitch 的 base、切换 `t2`，再计算 `t1 + ks1`，输出标准二分量密文。
+- **`operator/ciphertext_multiply.hpp/cpp`**：完整密文乘法生成，执行输入分量 NTT、`cmult` 三分量张量积、INTT，并复用 `relinearization` 完成最终合成。
 
 ### 4) 指令编码模块 (`encode`)
 将生成出的 HPU 汇编进一步转译为 32 位机器码文本：
@@ -110,6 +111,7 @@ ctest --test-dir build --output-on-failure
 - `outputs/moddown/`
 - `outputs/auto/`
 - `outputs/keyswitch/`
+- `outputs/relinearization/`
 - `outputs/ciphertext_multiply/`
 - `outputs/rv_interface_smoke/`
 
@@ -142,7 +144,7 @@ ctest --test-dir build --output-on-failure
 
 修改 `N/Q/P/dnum` 时必须同步修改两处源配置，并满足 `N` 为 2 的幂、`ceil(N/64) <= 1024`（即 `N <= 65536`）、`num_q % dnum == 0`、`num_q + num_p <= 256`、所有 Q/P 模数可用 `uint32` 表示等约束。当前统一示例为 `N=4096, Q=4, P=3, dnum=2`。small Bank 5 为 32 line，固定范围 `0x1400..0x141F`，物理可放 512 个 context；由于 `MOD_ID` 只有 8 bit，软件可寻址上限为 256。它与 8 个并发对象槽位是两个独立资源。
 
-`hpu_delivery` 会为 `ciphertext_multiply` 自动生成与主配置一致的 `N=4096, Q=4, P=3, dnum=2` 输入、评估密钥、阶段 golden、最终输出、明文校验和 artifact checksum。它同时生成独立的 `uint32` HPU_MEM 镜像、q/Barrett 上下文、逐 stage twiddle、256B line offset/count，并从同一 reference 拆分出 NTT、INTT、MM、BConv、ModUp、PMULT、CMULT、ModDown 和 KeySwitch 的独立 UT 数据包。`auto/test_data/STATUS.md` 记录该算子当前的寄存器分配阻塞项。
+`hpu_delivery` 会为 `ciphertext_multiply` 自动生成与主配置一致的 `N=4096, Q=4, P=3, dnum=2` 输入、评估密钥、阶段 golden、最终输出、明文校验和 artifact checksum。它同时生成独立的 `uint32` HPU_MEM 镜像、q/Barrett 上下文、逐 stage twiddle、256B line offset/count，并从同一 reference 拆分出 NTT、INTT、MM、BConv、ModUp、PMULT、CMULT、ModDown、KeySwitch 和 Relinearization 的独立 UT 数据包。`auto/test_data/STATUS.md` 记录该算子当前的寄存器分配阻塞项。
 
 
 ## 4. 关键设计实现说明
@@ -154,10 +156,10 @@ ctest --test-dir build --output-on-failure
   为了支持分解字（Digit Decomposition），`modup` / `bconv` 在接口中新加入了 `q_offset` 参数与处理宽度 `num_q_digit`。使得在 `dnum > 1` 的外层循环下，基扩展算字能智能地识别应该处理当前分解下哪一部分素数环境与基偏移。
   
 - **流水线的统一复用：**
-  复杂的算子（如 `keyswitch`）不需要从头生成具体的 `hpu::pmul` 等语句。全部由底层统一拆解后的 `generate_hpu_*_body_asm` (Body Generator) 函数段拼接而成，避免了多次复制 DMA 及状态上下文切分代码。Body Generator 的 `append_psync` 默认关闭，只有形成独立完整程序时才开启；完整 `generate_hpu_*_asm` 接口默认在末尾追加通知。
+  复杂的算子不需要从头生成具体的 `hpu::pmul` 等语句。`relinearization` 复用完整 `keyswitch`，`ciphertext_multiply` 再复用 `relinearization`；全部由 `generate_hpu_*_body_asm` 函数段拼接。Body Generator 的 `append_psync` 默认关闭，只有形成独立完整程序时才开启；完整 `generate_hpu_*_asm` 接口默认在末尾追加通知。
 
 - **完整密文乘法语义：**
-  `cmult` 只负责 FHE 密文乘法中的张量积阶段，即 $t_0=a_0b_0$、$t_1=a_0b_1+a_1b_0$、$t_2=a_1b_1$。完整密文乘法由 `ciphertext_multiply` 负责：先将输入分量转换到 NTT 域做张量积，再回到系数域，对 $t_2$ 执行重线性化并合成标准二元密文 $(t_0+ks_0,\ t_1+ks_1)$。
+  `cmult` 只负责 FHE 密文乘法中的张量积阶段，即 $t_0=a_0b_0$、$t_1=a_0b_1+a_1b_0$、$t_2=a_1b_1$。`relinearization` 调用 `KeySwitch(base=t0, switching_component=t2, evk=rlk)` 得到 $(t_0+ks_0,ks_1)$，再生成 $t_1+ks_1$；`ciphertext_multiply` 直接复用该算子。
 
 - **生成与编码分层解耦：**
   `inline-asm` 仍负责汇编生成，`encode` 模块则负责解析、归一化和 32 位编码。两者保留独立边界，但通过同一 CMake 工程统一构建，从而降低汇编语义更新后生成器与编码器失配的风险。
@@ -182,7 +184,7 @@ ctest --test-dir build --output-on-failure
 - 每个可编码算子同时生成 `.inst32` 和 `.cmd26`；`cmd26[25]` 区分 custom0/custom1，custom0 直接携带 `inst[31:7]`，custom1 按控制逻辑字段重排并另带 offset/count sideband
 - `psync` 只在完整程序的最后发出，用于通知 CPU 整个 HPU 程序已经完成；不得将其插入算子内部作为 DMA 等待或阶段屏障
 - 当前 `.inst32` 输出仅覆盖可直接完成寄存器解析的 ASM；`auto` 仍含 `x_c0`、`x_offset`、`x_out` 等符号寄存器占位符，需在完成物理寄存器分配后再编码
-- `cmult` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32/.cmd26` 生成链路；其中 `ciphertext_multiply` 要求 `num_q % dnum == 0` 且 `num_q + num_p <= 256`
+- `cmult`、`keyswitch`、`relinearization` 与 `ciphertext_multiply` 均已进入统一 `.asm -> .inst32/.cmd26` 生成链路；后三者要求 `num_q % dnum == 0` 且 `num_q + num_p <= 256`
 - `ciphertext_multiply/test_data` 已由软件 reference 自动生成；二进制格式、shape 和校验值见其中的 `params.json` 与 `artifact_manifest.csv`
 - 顶层 `.bin` 是 `uint64` 数学 golden；真正面向 HPU 加载的是 `test_data/hardware/` 下按 256B line 补齐的 `.u32.bin`
 - `hardware/line_map.csv` 给出每个对象的 byte address、line offset 和 line count；custom1 固定使用 `GPR[rs1]=line_offset`、`GPR[rs2]=line_count`（256B line 单位），`hpu_mem_config.json` 给出 HPU_MEM window 值和 `0x00..0x18` CSR 编程顺序
