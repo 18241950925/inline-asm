@@ -54,6 +54,10 @@ constexpr std::size_t kMaxModContexts =
 
 static_assert(kNumQ + kNumP <= kMaxModContexts,
               "Q union P mod contexts exceed the 8-bit MOD_ID address space");
+static_assert(kN > 0 && (kN & (kN - 1)) == 0,
+              "N must be a power of two");
+static_assert((kN + kHpuWordsPerLine - 1) / kHpuWordsPerLine <= kRegularBankLines,
+              "polynomial object exceeds one 1024-line regular bank");
 
 struct Artifact {
     std::string path;

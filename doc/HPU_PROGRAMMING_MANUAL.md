@@ -614,11 +614,16 @@ on completion:
 | 0 | `seg` | 多项式片段/普通分段数据 |
 | 1 | `poly` | 完整多项式、twiddle 或多项式常量 |
 | 2 | `mod_ctx` | 模上下文集合 |
-| 3 | `shuffle_cfg` | shuffle 配置；编码保留，旧 `pshuf` 指令已删除 |
+| 3 | reserved | 当前软件 ABI 不定义语义，parser/encoder 必须拒绝 |
 
 `small_bank=0` 使用普通 bank 分配；`small_bank=1` 设置 `flag[0]`，请求把
 长度不超过 32 line 的小对象分配到 Bank 5。模上下文生成器固定使用
 `type=2, small_bank=1`，模表固定从 `0x1400` 开始。
+
+完整多项式对象包含 `N` 个 32-bit word。由于每个 HPU line 包含 64 word、
+普通 bank 最多容纳 1024 line，所有 NTT、INTT、KeySwitch 和完整密文乘法
+生成入口都要求 `ceil(N/64) <= 1024`。结合 radix-2 要求，当前允许的最大
+多项式次数为 `N=65536`；超出该范围时生成器返回 invalid config，不生成指令流。
 
 `rs1` 和 `rs2` 是 5-bit RISC-V 寄存器编号。执行时固定解释为
 `GPR[rs1]=HPU_MEM line offset`、`GPR[rs2]=line count`，单位均为 256B；

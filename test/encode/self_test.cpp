@@ -112,6 +112,7 @@ int main()
             "psample p0, p1, 0, 0, 0",
             "psync 0, 0",
             "dload x32, x0, p0, 0, 0",
+            "dload x0, x0, p0, 3, 0",
             "dload x0, x0, p0, 4, 0",
             "dload x0, x0, p0, 0",
             "dload x0, x0, p0, 2, 2",

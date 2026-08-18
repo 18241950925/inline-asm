@@ -137,7 +137,7 @@ std::uint32_t encode_dma(const Instruction& instruction) {
     ensure_range(instruction.rs1, 0, 31, "rs1");
     ensure_range(instruction.rs2, 0, 31, "rs2");
     ensure_range(instruction.obj_id, 0, 7, "obj_id");
-    ensure_range(instruction.type, 0, instruction.mnemonic == Mnemonic::kDstore ? 1 : 3, "type");
+    ensure_range(instruction.type, 0, instruction.mnemonic == Mnemonic::kDstore ? 1 : 2, "type");
     ensure_range(instruction.dma_flag, 0, instruction.mnemonic == Mnemonic::kDload ? 1 : 0,
                  "dma_flag");
 

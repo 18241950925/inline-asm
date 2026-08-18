@@ -28,8 +28,9 @@ std::string generate_hpu_keyswitch_body_asm(
     std::ostringstream asm_code;
 
     if (num_q <= 0 || num_p <= 0 || dnum <= 0 || !is_power_of_two(N)
+        || !hpu::fits_regular_object(N)
         || num_q % dnum != 0 || num_q + num_p > hpu::kMaxModContexts) {
-        asm_code << "        // Invalid config: require power-of-two N, divisible digits, and at most 256 mod contexts\n";
+        asm_code << "        // Invalid config: require power-of-two N fitting 1024 lines, divisible digits, and at most 256 mod contexts\n";
         return asm_code.str();
     }
 
@@ -37,7 +38,7 @@ std::string generate_hpu_keyswitch_body_asm(
     int digit_size = num_q / dnum;
 
     const int POBJ_MOD_CTX = 4;
-    const int TWIDDLE = 3; // Dummy for shuffle cfg
+    const int TWIDDLE = 3;
     const int POBJ_TMP_A = 0;
 
     asm_code << "        /* --- Decomposed digits loop (dnum = " << dnum << ") --- */\n";
@@ -162,8 +163,9 @@ std::string generate_hpu_keyswitch_asm(
     asm_code << "void hpu_keyswitch_N" << N << "_Q" << num_q << "_P" << num_p << "_D" << dnum << "(void) {\n";
 
     if (num_q <= 0 || num_p <= 0 || !is_power_of_two(N) || dnum <= 0
+        || !hpu::fits_regular_object(N)
         || num_q % dnum != 0 || num_q + num_p > hpu::kMaxModContexts) {
-        asm_code << "    // Invalid config: require power-of-two N, divisible digits, and at most 256 mod contexts\n";
+        asm_code << "    // Invalid config: require power-of-two N fitting 1024 lines, divisible digits, and at most 256 mod contexts\n";
         asm_code << "}\n";
         return asm_code.str();
     }

@@ -78,6 +78,8 @@ Encrypt(ctA, ctB)
 
 当前参数与主指令流一致：`N=4096`、`num_q=4`、`num_p=3`、`dnum=2`。数据使用确定性、无噪声、P 可整除的功能测试评估密钥，以获得逐位可比结果；它用于 UT/IT 定位，不代表生产密钥安全性。
 
+生成器和 reference 共同检查 `N` 为 2 的幂且 `ceil(N/64) <= 1024`，对应当前普通 bank 的最大可承载次数 `N=65536`。`dload load_type` 只接受 `0=seg`、`1=poly`、`2=mod_ctx`；编码值 3 为保留值并纳入 RV 负例。
+
 ## 4. 数据格式
 
 完整乘法数据位于 `outputs/ciphertext_multiply/test_data/`：

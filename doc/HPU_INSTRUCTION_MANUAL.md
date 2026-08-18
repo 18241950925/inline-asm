@@ -103,7 +103,7 @@ dstore rs1, rs2, psrc, rel
 
 | 指令 | 字段 | 约定 |
 | --- | --- | --- |
-| `dload` | `load_type` | `0=seg`、`1=poly`、`2=mod_ctx`、`3=shuffle_cfg` |
+| `dload` | `load_type` | `0=seg`、`1=poly`、`2=mod_ctx`；编码值 `3` 保留且软件拒绝 |
 | `dload` | `small_bank` | `0=普通 bank`、`1=设置 flag[0] 并请求 small Bank 5` |
 | `dstore` | `rel` | `0=写回后保留`、`1=写回完成后释放` |
 

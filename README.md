@@ -140,7 +140,7 @@ ctest --test-dir build --output-on-failure
 - Reference 参数位于 `test/reference/main.cpp` 的 `kN`、`kNumQ`、`kNumP`、`kDnum`、`kPlainModulus` 和 `kSeed`。
 - `outputs/*/test_data/params.json` 是生成结果，不是输入配置；直接修改后会在下一次生成时被覆盖。
 
-修改 `N/Q/P/dnum` 时必须同步修改两处源配置，并满足 `N` 为 2 的幂、`num_q % dnum == 0`、`num_q + num_p <= 256`、所有 Q/P 模数可用 `uint32` 表示等约束。当前统一示例为 `N=4096, Q=4, P=3, dnum=2`。small Bank 5 为 32 line，固定范围 `0x1400..0x141F`，物理可放 512 个 context；由于 `MOD_ID` 只有 8 bit，软件可寻址上限为 256。它与 8 个并发对象槽位是两个独立资源。
+修改 `N/Q/P/dnum` 时必须同步修改两处源配置，并满足 `N` 为 2 的幂、`ceil(N/64) <= 1024`（即 `N <= 65536`）、`num_q % dnum == 0`、`num_q + num_p <= 256`、所有 Q/P 模数可用 `uint32` 表示等约束。当前统一示例为 `N=4096, Q=4, P=3, dnum=2`。small Bank 5 为 32 line，固定范围 `0x1400..0x141F`，物理可放 512 个 context；由于 `MOD_ID` 只有 8 bit，软件可寻址上限为 256。它与 8 个并发对象槽位是两个独立资源。
 
 `hpu_delivery` 会为 `ciphertext_multiply` 自动生成与主配置一致的 `N=4096, Q=4, P=3, dnum=2` 输入、评估密钥、阶段 golden、最终输出、明文校验和 artifact checksum。它同时生成独立的 `uint32` HPU_MEM 镜像、q/Barrett 上下文、逐 stage twiddle、256B line offset/count，并从同一 reference 拆分出 NTT、INTT、MM、BConv、ModUp、PMULT、CMULT、ModDown 和 KeySwitch 的独立 UT 数据包。`auto/test_data/STATUS.md` 记录该算子当前的寄存器分配阻塞项。
 
@@ -175,7 +175,7 @@ ctest --test-dir build --output-on-failure
 
 调用方需要保证：
 
-- `N` 为 2 的幂（NTT需要传入以确定 Stage 层数）
+- `N` 为 2 的幂，且 `ceil(N/64) <= 1024`（当前硬件上限 `N <= 65536`）
 - 仅允许 3 个工作槽位：`p0/p1/p2`
 - 复杂算子（PMULT/CMULT/MODUP/MODDOWN）使用 `dload/dstore` 流式搬运，不在本地长期保留多基对象
 - `dload type=2, flag[0]=1` 将模表逻辑对象分配到 small Bank 5；DMA 与后续指令的一致性由硬件维护，可直接使用 `pmodld MOD_ID` 激活表项

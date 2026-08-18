@@ -7,6 +7,7 @@ namespace hpu {
 
 inline constexpr int kRegularBankCount = 5;
 inline constexpr int kRegularBankLines = 1024;
+inline constexpr int kHpuWordsPerLine = 64;
 inline constexpr int kSmallBankId = 5;
 inline constexpr int kSmallBankLines = 32;
 inline constexpr int kModTableBaseLine = 0x1400;
@@ -17,6 +18,19 @@ inline constexpr int kMaxModContexts =
     kPhysicalModContexts < (1 << kModIdBits)
         ? kPhysicalModContexts
         : (1 << kModIdBits);
+
+inline constexpr int hpu_lines_for_words(int words) {
+    return words > 0
+        ? words / kHpuWordsPerLine + (words % kHpuWordsPerLine != 0 ? 1 : 0)
+        : 0;
+}
+
+inline constexpr bool fits_regular_object(int words) {
+    return words > 0 && hpu_lines_for_words(words) <= kRegularBankLines;
+}
+
+static_assert(fits_regular_object(65536));
+static_assert(!fits_regular_object(65537));
 
 inline std::string pobj(int id) {
     return "p" + std::to_string(id);
@@ -29,8 +43,7 @@ inline std::string pobj(int id) {
 enum class DataType {
     seg = 0,
     poly = 1,
-    mod_ctx = 2,
-    shuffle_cfg = 3
+    mod_ctx = 2
 };
 
 enum class DloadFlag {

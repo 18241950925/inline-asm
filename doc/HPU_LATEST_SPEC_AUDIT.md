@@ -120,15 +120,17 @@ size 已拆为 low/high；delivery 门禁会拒绝 `RTL_CONFIRM_REQUIRED`，项�
 清零，并断言 `65537 <= q <= 2^32-1`、`mu >> 48 == 0`。delivery 门禁检查
 q 范围、`mu_bits=48` 和 `reserved_bits=48`。
 
-### A8. 参数检查没有覆盖本地 SRAM/PE 能力（P1）
+### A8. 参数检查没有覆盖本地 SRAM/PE 能力（部分修复，2026-08-18）
 
-本地证据：NTT 和完整乘法仍主要检查 N 为 2 的幂。context 数已按
-8-bit `MOD_ID` 限制为 256，但尚未统一检查普通 Bank 的半 bank/整 bank
-峰值驻留等目标能力。
+当前共享目标约束已定义 64 word/line、普通 Bank 1024 line，并在 NTT、INTT、
+KeySwitch、Auto 和完整密文乘法入口统一检查 `ceil(N/64) <= 1024`。因此 radix-2
+多项式上限被冻结为 `N <= 65536`；reference 对相同条件执行编译期断言。
+context 数也已按 8-bit `MOD_ID` 限制为 256。
 
 文档来源：《HPU 集成与编程手册》3.1.2、3.4；《HPU 控制逻辑设计文档》allocator 章节。
 
-修改建议：增加统一 `HpuTargetConfig` 校验，至少检查 `ceil(N/64) <= 1024`、完整 line 要求、twiddle `N/2` 的 line 数、q/mu 范围、`MOD_ID` 范围、8 个并发对象和 bank/half-bank 峰值驻留。对象数与 RNS limb/context 数必须分开建模。
+剩余工作：继续校验 8 个并发对象、普通 bank/half-bank 峰值驻留和 scratch
+布局。对象数与 RNS limb/context 数仍必须分开建模。
 
 ### A9. PE golden 是数学结果，不是位精确硬件 reference（P1）
 
@@ -189,6 +191,13 @@ negacyclic twist 或 INTT 归一化融合。《HPU_PE_反串讲》13.2 也要求
 循环只作为 DIT 数学实现细节；硬件 stage 配对由 stream_ctrl 地址生成和 PE
 lane transpose 实现，不再虚构独立隐式 shuffle。
 
+### A14. 未定义的 `dload load_type=3`（已修复，2026-08-18）
+
+最新飞书文档没有为 `load_type=3` 给出可执行语义。项目已删除原
+`DataType::shuffle_cfg`，将 dload 正向范围收紧为 0..2，从 RV 冒烟流移除
+type 3，并将其加入 parser/encoder 和 delivery 负例。原始 TYPE2 位段宽度保持
+2 bit；值 3 作为 reserved 编码处理。
+
 ## 4. 飞书文档历史矛盾与当前冻结结果
 
 下表记录来源之间的矛盾及按“新文档优先”或项目负责人决定采用的口径：
@@ -206,5 +215,5 @@ lane transpose 实现，不再虚构独立隐式 shuffle。
 1. C1-C5 均已冻结，并写入 machine-readable target ABI；持续回归其 delivery 检查。
 2. A1/A2/A3 已完成，持续用 RV smoke 的 32/26-bit 期望表回归。
 3. 完成 A4、A10：生成真实 DMA relocation/GPR 装载、CSR runtime 和可运行 host harness；A6 的数字 CSR 表已完成。
-4. 完成 A8-A9：补全目标参数校验和 PE bit-exact UT；A5/A7 已完成。
+4. 继续完成 A8 的峰值驻留/scratch 校验和 A9 的 PE bit-exact UT；N/line 容量校验已完成。
 5. 将 `.inst32 + cmd26 + HPU_MEM image + CSR sequence + expected checkpoints` 一起接入 RTL IT；只有该流程通过后，才能把 `HARDWARE_EXECUTION` 从 `CONDITIONAL` 改为 `PASS`。
