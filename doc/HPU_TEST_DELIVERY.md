@@ -67,7 +67,7 @@ Encrypt(ctA, ctB)
   -> TensorProduct(t0, t1, t2) over Q
   -> staged INTT(t0, t1, t2), then PMUL N^-1*psi^-i
   -> Decompose t2 into Q digits
-  -> Hybrid ModUp each digit to full Q union P
+  -> ModUp each digit to full Q union P
   -> PMUL psi^i, then staged NTT over Q union P
   -> Multiply-accumulate with rlk[digit][0..1]
   -> staged INTT over Q union P, then PMUL N^-1*psi^-i

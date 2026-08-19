@@ -379,11 +379,11 @@ Poly bconv_to_target(const BasisPoly& source,
     return out;
 }
 
-BasisPoly hybrid_modup(const BasisPoly& input_q,
-                       const std::vector<U64>& q_moduli,
-                       const std::vector<U64>& all_moduli,
-                       std::size_t offset,
-                       std::size_t digit_size)
+BasisPoly modup(const BasisPoly& input_q,
+                const std::vector<U64>& q_moduli,
+                const std::vector<U64>& all_moduli,
+                std::size_t offset,
+                std::size_t digit_size)
 {
     BasisPoly source;
     std::vector<U64> source_moduli;
@@ -1179,6 +1179,9 @@ void write_case_package(const std::filesystem::path& suite_root,
                         const std::vector<U64>& roots)
 {
     const std::filesystem::path root = suite_root / case_name / "test_data";
+    // Case packages are generated artifacts. Recreate the directory so renamed
+    // inputs/outputs from an older schema cannot survive and confuse consumers.
+    std::filesystem::remove_all(root);
     for (Artifact& artifact : artifacts) {
         write_binary(root / artifact.path, artifact.words);
         write_readable_artifact(root, artifact);
@@ -1335,7 +1338,7 @@ void generate(const std::filesystem::path& output_root,
         component.assign(all_moduli.size(), Poly(kN, 0));
     }
     for (std::size_t digit = 0; digit < kDnum; ++digit) {
-        modup_coeff[digit] = hybrid_modup(
+        modup_coeff[digit] = modup(
             tensor[2], q_moduli, all_moduli, digit * digit_size, digit_size);
         modup_ntt[digit] = transform_basis(modup_coeff[digit], all_moduli, all_roots, false);
         for (std::size_t component = 0; component < 2; ++component) {
@@ -1630,13 +1633,26 @@ void generate(const std::filesystem::path& output_root,
         write_case_package(*suite_root, "bconv",
                            common_params("bconv", "coefficient/Q0", "coefficient/P0",
                                          {q_moduli[0], p_moduli[0]}),
-                           case_artifacts,
-                           {q_moduli[0], p_moduli[0]}, {q_roots[0], all_roots[kNumQ]});
-        write_case_package(*suite_root, "modup",
-                           common_params("modup", "coefficient/Q0", "coefficient/P0",
-                                         {q_moduli[0], p_moduli[0]}),
                            std::move(case_artifacts),
                            {q_moduli[0], p_moduli[0]}, {q_roots[0], all_roots[kNumQ]});
+
+        case_artifacts.clear();
+        words.clear();
+        for (std::size_t i = 0; i < digit_size; ++i) {
+            append_words(words, tensor[2][i]);
+        }
+        add_artifact(case_artifacts, "input_digit_q.bin", "Q digit input for ModUp",
+                     {digit_size, kN}, std::move(words),
+                     {"basis_q_digit", "coefficient"});
+        words.clear(); append_words(words, modup_coeff[0]);
+        add_artifact(case_artifacts, "expected_qp.bin", "complete Q union P ModUp output",
+                     {kNumQ + kNumP, kN}, std::move(words),
+                     {"basis_q_then_p", "coefficient"});
+        write_case_package(*suite_root, "modup",
+                           common_params("modup", "coefficient/Q_digit0", "coefficient/QP",
+                                         all_moduli),
+                           std::move(case_artifacts),
+                           all_moduli, all_roots);
 
         case_artifacts.clear();
         words.clear(); append_words(words, ct_a_ntt[0]); append_words(words, ct_a_ntt[1]);

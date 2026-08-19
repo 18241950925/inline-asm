@@ -21,6 +21,8 @@ set(REQUIRED_FILES
     "outputs/ciphertext_multiply/test_data/expected/ciphertext_out_q.bin"
     "outputs/ciphertext_multiply/test_data/expected/plaintext_product_mod_t.bin"
     "outputs/ciphertext_multiply/test_data/VALIDATION.txt"
+    "outputs/modup/test_data/input_digit_q.bin"
+    "outputs/modup/test_data/expected_qp.bin"
     "outputs/ciphertext_multiply/test_data/hardware/abi.json"
     "outputs/ciphertext_multiply/test_data/hardware/hardware_manifest.csv"
     "outputs/ciphertext_multiply/test_data/hardware/hpu_mem_image.u32.bin"
@@ -181,7 +183,7 @@ file(READ "${ROOT}/output/ciphertext_multiply.asm" CIPHERTEXT_ASM)
 file(READ "${ROOT}/output/relinearization.asm" RELINEARIZATION_ASM)
 foreach(MARKER
         "Tensor product in NTT domain"
-        "HYBRID MODUP: Q_digit -> full Q union P"
+        "MODUP: Q_digit -> full Q union P"
         "Relinearization: KeySwitch(t2, rlk)"
         "MODDOWN stage-1: BConv P -> Q"
         "Compose final ciphertext")
@@ -211,6 +213,45 @@ string(FIND "${CIPHERTEXT_SOURCE}"
     "generate_relinearize_t2_body_asm" LEGACY_RELINEARIZATION_POSITION)
 if(NOT LEGACY_RELINEARIZATION_POSITION EQUAL -1)
     message(FATAL_ERROR "Ciphertext multiply still contains the legacy relinearization generator")
+endif()
+
+file(READ "${ROOT}/src/poly/modup.cpp" MODUP_SOURCE)
+file(READ "${ROOT}/src/operator/keyswitch.cpp" KEYSWITCH_SOURCE)
+file(READ "${ROOT}/src/poly/auto.cpp" AUTO_SOURCE)
+foreach(SOURCE_TEXT MODUP_SOURCE KEYSWITCH_SOURCE AUTO_SOURCE)
+    string(FIND "${${SOURCE_TEXT}}"
+        "generate_hpu_hybrid_modup_body_asm" LEGACY_HYBRID_MODUP_POSITION)
+    if(NOT LEGACY_HYBRID_MODUP_POSITION EQUAL -1)
+        message(FATAL_ERROR "${SOURCE_TEXT} still references the removed hybrid ModUp API")
+    endif()
+endforeach()
+foreach(SOURCE_TEXT KEYSWITCH_SOURCE AUTO_SOURCE)
+    string(FIND "${${SOURCE_TEXT}}"
+        "generate_hpu_modup_body_asm" UNIFIED_MODUP_POSITION)
+    if(UNIFIED_MODUP_POSITION EQUAL -1)
+        message(FATAL_ERROR "${SOURCE_TEXT} does not call the unified full-basis ModUp generator")
+    endif()
+endforeach()
+
+file(READ "${ROOT}/output/modup.asm" MODUP_ASM)
+foreach(MARKER
+        "MODUP: Q_digit -> full Q union P"
+        "Copy Q context 0"
+        "Copy Q context 1"
+        "Target context 6")
+    string(FIND "${MODUP_ASM}" "${MARKER}" POSITION)
+    if(POSITION EQUAL -1)
+        message(FATAL_ERROR "Unified ModUp stream is missing marker: ${MARKER}")
+    endif()
+endforeach()
+
+file(READ "${ROOT}/outputs/modup/test_data/params.json" MODUP_PARAMS)
+if(NOT MODUP_PARAMS MATCHES "\"output_domain\": \"coefficient/QP\"")
+    message(FATAL_ERROR "ModUp test package does not describe a complete Q union P output")
+endif()
+file(READ "${ROOT}/outputs/modup/test_data/artifact_manifest.csv" MODUP_MANIFEST)
+if(NOT MODUP_MANIFEST MATCHES "expected_qp.bin")
+    message(FATAL_ERROR "ModUp test package does not contain the complete Q union P golden")
 endif()
 
 file(READ "${ROOT}/output/ntt.asm" NTT_ASM)

@@ -245,22 +245,24 @@ void test_cmult_codegen()
 
 void test_modup_codegen()
 {
-	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
-		std::string modup = generate_hpu_modup_asm(
-		kBconvCfg.num_q,
-		kBconvCfg.num_p,
-		0,
-		true);
+		if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+			std::string modup = generate_hpu_modup_asm(
+				kCiphertextMultiplyCfg.num_q,
+				kCiphertextMultiplyCfg.num_p,
+				kCiphertextMultiplyCfg.num_q / kCiphertextMultiplyCfg.dnum,
+				0,
+				true);
 	std::ofstream("output/modup.cpp") << modup;
 	std::cout << "Saved modup ASM to output/modup.cpp\n";
 	}
 
-	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
-		std::string modup_body = generate_hpu_modup_body_asm(
-		kBconvCfg.num_q,
-		kBconvCfg.num_p,
-		0,
-		true);
+		if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+			std::string modup_body = generate_hpu_modup_body_asm(
+				kCiphertextMultiplyCfg.num_q,
+				kCiphertextMultiplyCfg.num_p,
+				kCiphertextMultiplyCfg.num_q / kCiphertextMultiplyCfg.dnum,
+				0,
+				true);
 	std::ofstream("output/modup.asm") << modup_body;
 	std::cout << "Saved modup body ASM to output/modup.asm\n";
 	}

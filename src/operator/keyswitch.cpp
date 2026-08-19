@@ -47,9 +47,9 @@ std::string generate_hpu_keyswitch_body_asm(
         int q_offset = d * digit_size;
         asm_code << "        /* --- Digit " << d << " --- */\n";
 
-        // 1. ModUp (Q -> P)
+        // 1. ModUp (Q digit -> full Q union P)
         asm_code << "        /* --- Step 1: ModUp --- */\n";
-        asm_code << generate_hpu_hybrid_modup_body_asm(
+        asm_code << generate_hpu_modup_body_asm(
             num_q,
             num_p,
             digit_size,

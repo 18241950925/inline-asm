@@ -8,20 +8,6 @@
 #include <vector>
 
 std::string generate_hpu_modup_body_asm(
-    int num_q_digit,
-    int num_p,
-    int q_offset,
-    bool append_psync)
-{
-    // MODUP 等价于 BConv: Q -> P
-    return generate_hpu_bconv_body_asm(
-        num_q_digit,
-        num_p,
-        q_offset,
-        append_psync);
-}
-
-std::string generate_hpu_hybrid_modup_body_asm(
     int num_q,
     int num_p,
     int num_q_digit,
@@ -32,7 +18,7 @@ std::string generate_hpu_hybrid_modup_body_asm(
     if (num_q <= 0 || num_p <= 0 || num_q_digit <= 0 || q_offset < 0
         || q_offset + num_q_digit > num_q
         || num_q + num_p > hpu::kMaxModContexts) {
-        asm_code << "        // Invalid hybrid ModUp config\n";
+        asm_code << "        // Invalid ModUp config\n";
         return asm_code.str();
     }
 
@@ -50,7 +36,7 @@ std::string generate_hpu_hybrid_modup_body_asm(
         target_contexts.push_back(num_q + i);
     }
 
-    asm_code << "        /* HYBRID MODUP: Q_digit -> full Q union P */\n";
+    asm_code << "        /* MODUP: Q_digit -> full Q union P */\n";
     asm_code << "        /* Retain source digit limbs in full-basis workspace */\n";
     for (int i = 0; i < num_q_digit; ++i) {
         asm_code << "        /* Copy Q context " << (q_offset + i) << " */\n";
@@ -69,26 +55,29 @@ std::string generate_hpu_hybrid_modup_body_asm(
 }
 
 std::string generate_hpu_modup_asm(
-    int num_q_digit,
+    int num_q,
     int num_p,
+    int num_q_digit,
     int q_offset,
     bool append_psync)
 {
     std::ostringstream asm_code;
-    asm_code << "void hpu_modup_Q" << num_q_digit << "_P" << num_p << "(void) {\n";
+    asm_code << "void hpu_modup_Q" << num_q << "_P" << num_p
+             << "_D" << num_q_digit << "_O" << q_offset << "(void) {\n";
 
-    if (num_q_digit <= 0 || num_p <= 0 || q_offset < 0
-        || q_offset + num_q_digit + num_p > hpu::kMaxModContexts) {
-        asm_code << "    // Invalid config: require positive bases within the 8-bit MOD_ID capacity\n";
+    if (num_q <= 0 || num_p <= 0 || num_q_digit <= 0 || q_offset < 0
+        || q_offset + num_q_digit > num_q
+        || num_q + num_p > hpu::kMaxModContexts) {
+        asm_code << "    // Invalid config: require a Q digit within the complete Q union P basis\n";
         asm_code << "}\n";
         return asm_code.str();
     }
 
     asm_code << "    __asm__ volatile(\n";
-    asm_code << "        /* MODUP: BConv Q -> P */\n";
     asm_code << generate_hpu_modup_body_asm(
-        num_q_digit,
+        num_q,
         num_p,
+        num_q_digit,
         q_offset,
         append_psync);
 

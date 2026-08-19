@@ -2,12 +2,12 @@
 
 本文件用于说明当前项目中各个函数内 `dload` 占位符实际应加载的数据内容，便于测试同学准备输入数据与核对外部访存流。
 
-## 与当前交付流程的关系
+<!-- ## 与当前交付流程的关系
 
 - `src/main.cpp` 通过 `inline_asm_codegen` 生成下述算子的 ASM，仍是 HPU 指令流入口。
 - `test/reference/main.cpp` 通过 `hpu_reference_vectors` 生成对应输入、常量、期望输出和人工可读 `.hex.txt`。
 - 完整密文乘法的 HPU_MEM 镜像入口见 `outputs/ciphertext_multiply/test_data/memory_map.json`，逐对象 256B line offset/count 见 `hardware/line_map.csv`，阶段搬运顺序见同目录 `dma_plan.csv`。
-- `hardware/hpu_mem_config.json` 已给出 base/size、冻结的 `0x00..0x18` CSR 偏移和编程顺序。custom1 固定解释为 `GPR[rs1]=HPU_MEM line offset`、`GPR[rs2]=line count`，单位均为 256B；runtime 仍需用 `line_map.csv` 的具体值替换或重定位代码中的 `x0` 和符号寄存器。
+- `hardware/hpu_mem_config.json` 已给出 base/size、冻结的 `0x00..0x18` CSR 偏移和编程顺序。custom1 固定解释为 `GPR[rs1]=HPU_MEM line offset`、`GPR[rs2]=line count`，单位均为 256B；runtime 仍需用 `line_map.csv` 的具体值替换或重定位代码中的 `x0` 和符号寄存器。 -->
 
 ## 通用约定
 
@@ -20,8 +20,8 @@
 - `dload` 使目标逻辑对象进入 live 状态。生成器在只读输入、常量、twiddle和模表对象最后一次使用后发出 `pfree`；输出使用 `dstore rel=1` 时由 DMA 完成后释放，不再重复发出 `pfree`。
 - 当前 `SMALL_BANK_LINES=32`、`MOD_TABLE_BASE_LINE=0x1400`。每 line 容纳 16 个 context，物理容量为 512；受 8-bit `MOD_ID` 限制，软件最多生成 256 个 context。
 - NTT 在 stage 0 前必须加载 `pre_twist` 并显式 PMUL；INTT 在最终 stage 后必须加载 `post_untwist_scale` 并显式 PMUL。
-- 数学 golden 使用 little-endian `uint64`；`dload` 应使用 `test_data/hardware/` 下 little-endian `uint32`、按 256B line 补齐的独立镜像或完整 `hpu_mem_image.u32.bin`。
-- 每个 NTT/INTT stage twiddle 镜像固定包含 `N/2` 个 `uint32`，按 group-major butterfly 顺序排列；默认 `N=4096` 时为 32 line。
+<!-- - 数学 golden 使用 little-endian `uint64`；`dload` 应使用 `test_data/hardware/` 下 little-endian `uint32`、按 256B line 补齐的独立镜像或完整 `hpu_mem_image.u32.bin`。
+- 每个 NTT/INTT stage twiddle 镜像固定包含 `N/2` 个 `uint32`，按 group-major butterfly 顺序排列；默认 `N=4096` 时为 32 line。 -->
 
 ### 目标槽位编号说明
 
@@ -59,7 +59,8 @@
 Stage 2 的乘加结果保存在 `POBJ_ACC (p2)`，它不是 `dload`
 目标，而是 `pmul/pmac` 目标和随后的 `dstore` 源对象。
 
-> 备注：`generate_hpu_modup_body_asm` 直接复用 BConv 的 dload 语义。
+> 备注：BConv 仍作为独立基转换原语和 ModUp 的内部计算步骤保留；
+> 它不再等同于完整 ModUp 算子。
 
 ---
 
@@ -68,16 +69,9 @@ Stage 2 的乘加结果保存在 `POBJ_ACC (p2)`，它不是 `dload`
 
 ### dload 映射
 
-- 完全等同于 **BConv Q -> P** 的 dload 行为（见上节）。
-- 其中 `num_q_digit` 与 `q_offset` 控制输入基的“切片范围”。
-- 实际槽位与 BConv 相同：`p0`=输入/临时值，`p1`=预计算常量，
-  `p2`=累加输出，`p4`=模表。
-
-## `generate_hpu_hybrid_modup_body_asm`
-
-来源: [`src/poly/modup.cpp`](../src/poly/modup.cpp)
-
-Hybrid ModUp 用于 KeySwitch，把一个 Q digit 扩展成完整 `Q∪P`：
+当前唯一的 ModUp 语义是把 `Q[q_offset:q_offset+num_q_digit)` 对应的
+Q digit 扩展成完整 `Q∪P`。它先原样保留 digit 中已有的 Q limbs，再通过
+BConv 生成 `Q\digit ∪ P`：
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
@@ -85,7 +79,8 @@ Hybrid ModUp 用于 KeySwitch，把一个 Q digit 扩展成完整 `Q∪P`：
 | 后续 BConv | `POBJ_MOD_CTX (p4)` / `POBJ_TMP_A (p0)` / `POBJ_TMP_B (p1)` | 模表、source limb/临时值、预计算常量 | 目标基是 `Q\digit ∪ P` |
 
 `POBJ_ACC (p2)` 接收 BConv 累加结果。最终由原样保留的 digit limbs
-和 BConv 生成的 `Q\digit ∪ P` 共同组成完整 `Q∪P`。
+和 BConv 生成的 `Q\digit ∪ P` 共同组成完整 `Q∪P`。原来仅执行
+`BConv Q_digit -> P` 的“普通 ModUp”公共实现已移除。
 
 ---
 
@@ -167,18 +162,18 @@ Hybrid ModUp 用于 KeySwitch，把一个 Q digit 扩展成完整 `Q∪P`：
 
 ### dload 映射（核心步骤）
 
-**Step 1: Hybrid ModUp（Q digit -> Q∪P）**
+**Step 1: ModUp（Q digit -> Q∪P）**
 
-- 实际复用 `generate_hpu_hybrid_modup_body_asm`，将当前 Q digit 扩展到
+- 复用统一的 `generate_hpu_modup_body_asm`，将当前 Q digit 扩展到
   完整 `Q∪P`。槽位为 `p0`=原始 digit limb/临时值，`p1`=预计算常量，
-  `p2`=BConv 累加输出，`p4`=模表（见 Hybrid ModUp 一节）。
+  `p2`=BConv 累加输出，`p4`=模表（见 ModUp 一节）。
 
 **Step 2: NTT on Q & P**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
 | Step 2 开头 | `POBJ_MOD_CTX (p4)` | 完整 `Q∪P` 模表镜像 | 当前 digit 仅加载一次 |
-| 每个基 | `POBJ_TMP_A (p0)` | `switching_component_up` 的当前基分片 | Hybrid ModUp 输出的完整基分片 |
+| 每个基 | `POBJ_TMP_A (p0)` | `switching_component_up` 的当前基分片 | ModUp 输出的完整基分片 |
 | 每个基 | `TWIDDLE (p3)` | NTT `pre_twist` 和逐 stage twiddle 表 | 每个基共 `1+logN` 次 twiddle `dload` |
 
 **Step 3: Multiply with EVK**
@@ -252,7 +247,7 @@ Hybrid ModUp 用于 KeySwitch，把一个 Q digit 扩展成完整 `Q∪P`：
 | 输入 NTT | `p0`=`ct_a_q/ct_b_q` 当前 limb，`p3`=NTT twiddle，`p4`=Q 模表 | 两个密文的 NTT 域分量（从 `p0` dstore） |
 | 张量积 | `p0/p1`=NTT 域 `a0/a1` 与 `b0/b1`，`p4`=Q 模表 | `p2`=NTT 域 `t0/t1/t2` |
 | 张量 INTT | `p0`=`t0/t1/t2`，`p3`=INTT twiddle，`p4`=Q 模表 | 系数域 `t0/t1/t2`（从 `p0` dstore） |
-| digit Hybrid ModUp/NTT | `p0/p1`=digit/BConv 常量，`p3`=twiddle，`p4`=Q∪P 模表 | `p2`=BConv 结果，随后 `p0`=Q∪P 上的 digit NTT |
+| digit ModUp/NTT | `p0/p1`=digit/BConv 常量，`p3`=twiddle，`p4`=Q∪P 模表 | `p2`=BConv 结果，随后 `p0`=Q∪P 上的 digit NTT |
 | EVK 乘加 | `p0`=digit NTT，`p1`=`relinearization_key_ntt_qp`，非首 digit 另加载 `p2`=累加值 | `p2`=Q∪P 上两个 key-switch 分量 |
 | INTT/ModDown | `p0/p1`=累加分量/基转换常量，`p2`=临时输出，`p3`=twiddle，`p4`=模表 | Q 基 key-switch correction |
 | 最终合并 | 第一分量：`p0`=`ks0 correction`、`p1`=`t0`；第二分量：`p0`=`t1`、`p1`=`ks1`；`p4`=Q 模表 | `p2`=`ciphertext_out_q` 当前 limb |
@@ -283,15 +278,15 @@ Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphe
 
 - 复用 `generate_hpu_modup_body_asm` 的 dload 语义（见上文）。
 - 槽位为 `p0`=输入/临时值，`p1`=预计算常量，`p2`=BConv 累加输出，
-  `p4`=模表。注意：当前这里调用的是普通 ModUp，它不会像 Hybrid ModUp
-  一样保留 source digit 并补齐完整 `Q∪P`；因此与后续全基遍历尚未闭环。
+  `p4`=模表。当前 ModUp 会保留 source digit 并通过 BConv 补齐完整
+  `Q∪P`，与后续全基遍历一致。
 
 **Step 2: NTT（注释称 Fused NTT Auto，但实现尚未使用 `auto_idx`）**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
 | 当前 digit 的 Step 2 开头 | `POBJ_MOD_CTX (p4)` | 完整 `Q∪P` 模表镜像 | 循环外仅加载一次 |
-| 每个基 | `SLOT_A (p0)` | `ct1_up` 当前基分片 | 代码按完整 `Q∪P` 遍历，但普通 ModUp 尚未产生所有这些分片 |
+| 每个基 | `SLOT_A (p0)` | `ct1_up` 当前基分片 | ModUp 已产生完整 `Q∪P` 分片 |
 | 每个基 | `TWIDDLE (p3)` | NTT `pre_twist` 和逐 stage twiddle | 当前是普通 NTT，未融合 `auto_idx` |
 
 **Step 3: Multiply & Accumulate with EVK**
