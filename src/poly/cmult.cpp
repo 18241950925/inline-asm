@@ -48,7 +48,7 @@ std::string generate_hpu_cmult_body_asm(
 
         asm_code << hpu::pmodld(i);
 
-        // a0 * b0
+        asm_code << "        /* --- CMULT out0 = a0 * b0 --- */\n";
         asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a0
         asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b0
         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A, POBJ_B);
@@ -56,15 +56,7 @@ std::string generate_hpu_cmult_body_asm(
         asm_code << hpu::pfree(POBJ_B);
         asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1); // store out0
 
-        // a1 * b1
-        asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a1
-        asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b1
-        asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A, POBJ_B);
-        asm_code << hpu::pfree(POBJ_A);
-        asm_code << hpu::pfree(POBJ_B);
-        asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1); // store out2
-
-        // a0 * b1 + a1 * b0
+        asm_code << "        /* --- CMULT out1 = a0 * b1 + a1 * b0 --- */\n";
         asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a0
         asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b1
         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A, POBJ_B);
@@ -78,6 +70,14 @@ std::string generate_hpu_cmult_body_asm(
         asm_code << hpu::pfree(POBJ_A);
         asm_code << hpu::pfree(POBJ_B);
         asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1); // store out1
+
+        asm_code << "        /* --- CMULT out2 = a1 * b1 --- */\n";
+        asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a1
+        asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b1
+        asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A, POBJ_B);
+        asm_code << hpu::pfree(POBJ_A);
+        asm_code << hpu::pfree(POBJ_B);
+        asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1); // store out2
     }
 
     asm_code << hpu::pfree(POBJ_MOD_CTX);

@@ -101,11 +101,12 @@ BConv 生成 `Q\digit ∪ P`：
 | --- | --- | --- | --- |
 | 算子开头（循环外仅一次） | `POBJ_MOD_CTX (p4)` | **完整 Q 模表镜像** | Bank 5 模表对象；后续 `pmodld MOD_ID` 选择 `q_i` |
 | 乘 `a0*b0` | `POBJ_A (p0)` / `POBJ_B (p1)` | `a0` / `b0` | 同一 `q_i` 基 |
-| 乘 `a1*b1` | `POBJ_A (p0)` / `POBJ_B (p1)` | `a1` / `b1` | 同一 `q_i` 基 |
 | 乘 `a0*b1` | `POBJ_A (p0)` / `POBJ_B (p1)` | `a0` / `b1` | 同一 `q_i` 基 |
 | 乘 `a1*b0` | `POBJ_A (p0)` / `POBJ_B (p1)` | `a1` / `b0` | 同一 `q_i` 基 |
+| 乘 `a1*b1` | `POBJ_A (p0)` / `POBJ_B (p1)` | `a1` / `b1` | 同一 `q_i` 基 |
 
-三个乘法结果均使用 `POBJ_OUT (p2)` 作为计算目标和 `dstore` 源对象。
+三个分量按 `out0 -> out1 -> out2` 的自然顺序计算和写回，均使用
+`POBJ_OUT (p2)` 作为计算目标和 `dstore` 源对象。
 
 ---
 

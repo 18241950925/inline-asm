@@ -181,6 +181,7 @@ endforeach()
 
 file(READ "${ROOT}/output/ciphertext_multiply.asm" CIPHERTEXT_ASM)
 file(READ "${ROOT}/output/relinearization.asm" RELINEARIZATION_ASM)
+file(READ "${ROOT}/output/cmult.asm" CMULT_ASM)
 foreach(MARKER
         "Tensor product in NTT domain"
         "MODUP: Q_digit -> full Q union P"
@@ -192,6 +193,17 @@ foreach(MARKER
         message(FATAL_ERROR "Missing ciphertext multiply stage marker: ${MARKER}")
     endif()
 endforeach()
+
+string(FIND "${CMULT_ASM}" "CMULT out0 = a0 * b0" CMULT_OUT0_POSITION)
+string(FIND "${CMULT_ASM}" "CMULT out1 = a0 * b1 + a1 * b0" CMULT_OUT1_POSITION)
+string(FIND "${CMULT_ASM}" "CMULT out2 = a1 * b1" CMULT_OUT2_POSITION)
+if(CMULT_OUT0_POSITION EQUAL -1
+        OR CMULT_OUT1_POSITION EQUAL -1
+        OR CMULT_OUT2_POSITION EQUAL -1
+        OR CMULT_OUT0_POSITION GREATER_EQUAL CMULT_OUT1_POSITION
+        OR CMULT_OUT1_POSITION GREATER_EQUAL CMULT_OUT2_POSITION)
+    message(FATAL_ERROR "CMult does not compute/store components in out0, out1, out2 order")
+endif()
 
 foreach(MARKER
         "KeySwitch(base=t0, switching_component=t2)"
