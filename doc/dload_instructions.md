@@ -2,13 +2,6 @@
 
 本文件用于说明当前项目中各个函数内 `dload` 占位符实际应加载的数据内容，便于测试同学准备输入数据与核对外部访存流。
 
-<!-- ## 与当前交付流程的关系
-
-- `src/main.cpp` 通过 `inline_asm_codegen` 生成下述算子的 ASM，仍是 HPU 指令流入口。
-- `test/reference/main.cpp` 通过 `hpu_reference_vectors` 生成对应输入、常量、期望输出和人工可读 `.hex.txt`。
-- 完整密文乘法的 HPU_MEM 镜像入口见 `outputs/ciphertext_multiply/test_data/memory_map.json`，逐对象 256B line offset/count 见 `hardware/line_map.csv`，阶段搬运顺序见同目录 `dma_plan.csv`。
-- `hardware/hpu_mem_config.json` 已给出 base/size、冻结的 `0x00..0x18` CSR 偏移和编程顺序。custom1 固定解释为 `GPR[rs1]=HPU_MEM line offset`、`GPR[rs2]=line count`，单位均为 256B；runtime 仍需用 `line_map.csv` 的具体值替换或重定位代码中的 `x0` 和符号寄存器。 -->
-
 ## 通用约定
 
 - `dload(rs1, rs2, pobj, type, small_bank)` 表示“为逻辑对象分配片上 SRAM 并从外存搬入数据”：
@@ -20,8 +13,6 @@
 - `dload` 使目标逻辑对象进入 live 状态。生成器在只读输入、常量、twiddle和模表对象最后一次使用后发出 `pfree`；输出使用 `dstore rel=1` 时由 DMA 完成后释放，不再重复发出 `pfree`。
 - 当前 `SMALL_BANK_LINES=32`、`MOD_TABLE_BASE_LINE=0x1400`。每 line 容纳 16 个 context，物理容量为 512；受 8-bit `MOD_ID` 限制，软件最多生成 256 个 context。
 - NTT 在 stage 0 前必须加载 `pre_twist` 并显式 PMUL；INTT 在最终 stage 后必须加载 `post_untwist_scale` 并显式 PMUL。
-<!-- - 数学 golden 使用 little-endian `uint64`；`dload` 应使用 `test_data/hardware/` 下 little-endian `uint32`、按 256B line 补齐的独立镜像或完整 `hpu_mem_image.u32.bin`。
-- 每个 NTT/INTT stage twiddle 镜像固定包含 `N/2` 个 `uint32`，按 group-major butterfly 顺序排列；默认 `N=4096` 时为 32 line。 -->
 
 ### 目标槽位编号说明
 
@@ -59,9 +50,6 @@
 Stage 2 的乘加结果保存在 `POBJ_ACC (p2)`，它不是 `dload`
 目标，而是 `pmul/pmac` 目标和随后的 `dstore` 源对象。
 
-> 备注：BConv 仍作为独立基转换原语和 ModUp 的内部计算步骤保留；
-> 它不再等同于完整 ModUp 算子。
-
 ---
 
 ## `generate_hpu_modup_body_asm`
@@ -69,7 +57,7 @@ Stage 2 的乘加结果保存在 `POBJ_ACC (p2)`，它不是 `dload`
 
 ### dload 映射
 
-当前唯一的 ModUp 语义是把 `Q[q_offset:q_offset+num_q_digit)` 对应的
+当前的 ModUp 语义是把 `Q[q_offset:q_offset+num_q_digit)` 对应的
 Q digit 扩展成完整 `Q∪P`。它先原样保留 digit 中已有的 Q limbs，再通过
 BConv 生成 `Q\digit ∪ P`：
 
@@ -79,8 +67,7 @@ BConv 生成 `Q\digit ∪ P`：
 | 后续 BConv | `POBJ_MOD_CTX (p4)` / `POBJ_TMP_A (p0)` / `POBJ_TMP_B (p1)` | 模表、source limb/临时值、预计算常量 | 目标基是 `Q\digit ∪ P` |
 
 `POBJ_ACC (p2)` 接收 BConv 累加结果。最终由原样保留的 digit limbs
-和 BConv 生成的 `Q\digit ∪ P` 共同组成完整 `Q∪P`。原来仅执行
-`BConv Q_digit -> P` 的“普通 ModUp”公共实现已移除。
+和 BConv 生成的 `Q\digit ∪ P` 共同组成完整 `Q∪P`。
 
 ---
 
@@ -164,7 +151,7 @@ BConv 生成 `Q\digit ∪ P`：
 
 **Step 1: ModUp（Q digit -> Q∪P）**
 
-- 复用统一的 `generate_hpu_modup_body_asm`，将当前 Q digit 扩展到
+- 复 `generate_hpu_modup_body_asm`，将当前 Q digit 扩展到
   完整 `Q∪P`。槽位为 `p0`=原始 digit limb/临时值，`p1`=预计算常量，
   `p2`=BConv 累加输出，`p4`=模表（见 ModUp 一节）。
 
