@@ -59,9 +59,6 @@
 Stage 2 的乘加结果保存在 `POBJ_ACC (p2)`，它不是 `dload`
 目标，而是 `pmul/pmac` 目标和随后的 `dstore` 源对象。
 
-> 备注：BConv 仍作为独立基转换原语和 ModUp 的内部计算步骤保留；
-> 它不再等同于完整 ModUp 算子。
-
 ---
 
 ## `generate_hpu_modup_body_asm`
@@ -69,7 +66,7 @@ Stage 2 的乘加结果保存在 `POBJ_ACC (p2)`，它不是 `dload`
 
 ### dload 映射
 
-当前唯一的 ModUp 语义是把 `Q[q_offset:q_offset+num_q_digit)` 对应的
+当前的 ModUp 语义是把 `Q[q_offset:q_offset+num_q_digit)` 对应的
 Q digit 扩展成完整 `Q∪P`。它先原样保留 digit 中已有的 Q limbs，再通过
 BConv 生成 `Q\digit ∪ P`：
 
@@ -79,8 +76,7 @@ BConv 生成 `Q\digit ∪ P`：
 | 后续 BConv | `POBJ_MOD_CTX (p4)` / `POBJ_TMP_A (p0)` / `POBJ_TMP_B (p1)` | 模表、source limb/临时值、预计算常量 | 目标基是 `Q\digit ∪ P` |
 
 `POBJ_ACC (p2)` 接收 BConv 累加结果。最终由原样保留的 digit limbs
-和 BConv 生成的 `Q\digit ∪ P` 共同组成完整 `Q∪P`。原来仅执行
-`BConv Q_digit -> P` 的“普通 ModUp”公共实现已移除。
+和 BConv 生成的 `Q\digit ∪ P` 共同组成完整 `Q∪P`。
 
 ---
 
@@ -164,7 +160,7 @@ BConv 生成 `Q\digit ∪ P`：
 
 **Step 1: ModUp（Q digit -> Q∪P）**
 
-- 复用统一的 `generate_hpu_modup_body_asm`，将当前 Q digit 扩展到
+- 复 `generate_hpu_modup_body_asm`，将当前 Q digit 扩展到
   完整 `Q∪P`。槽位为 `p0`=原始 digit limb/临时值，`p1`=预计算常量，
   `p2`=BConv 累加输出，`p4`=模表（见 ModUp 一节）。
 
