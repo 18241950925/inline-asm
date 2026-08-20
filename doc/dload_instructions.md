@@ -24,7 +24,7 @@
 | `p0` | 输入/工作对象 A | 密文分量、BConv 输入、NTT/INTT 数据对象 |
 | `p1` | 输入/工作对象 B | 预计算常量、EVK、第二输入 |
 | `p2` | 累加器/输出 | `pmul`/`pmac`/`padd` 的结果对象 |
-| `p3` | 复合算子的 twiddle | KeySwitch、Auto 和完整密文乘法内的 NTT/INTT 常量 |
+| `p3` | 复合算子的 twiddle | KeySwitch/密文乘法使用普通表；Auto 按调用位置使用普通表或 `auto_idx` 特化表 |
 | `p4` | 模表逻辑对象 | `dload ..., p4, 2, 1`，由 allocator 放入 small Bank 5 |
 
 > 例外：独立 `output/ntt.asm` / `output/intt.asm` 由 `src/main.cpp`
@@ -249,18 +249,30 @@ Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphe
 
 ### dload 映射（核心步骤）
 
-> **当前实现限制：** `auto_idx` 尚未参与 NTT/INTT 指令或 twiddle DMA
-> 地址的生成。因此下表按“当前实际发出的 dload”记录；`p3` 目前加载的
-> 是普通 NTT/INTT twiddle，不应解释为已实现的 automorphism 专用表。
+Auto 不依赖硬件显式执行系数重排，而是将自同构融合到
+NTT/INTT 的 twiddle 中：对 `auto_idx = k` 使用指数按 `k`
+变换的 twiddle 表，使变换结果等价于对多项式执行
+`sigma_k: a(X) -> a(X^k)` 后再进入普通 NTT 域。
 
-**Step 0: c0 的 NTT -> INTT（实现尚未使用 `auto_idx`）**
+> **DMA 绑定约定：** Auto 复用普通 `pntt`/`pintt` 指令和
+> `TWIDDLE (p3)` 逻辑槽位，所以 `auto_idx` 不需要出现在
+> `pntt`/`pintt` 的指令编码中。普通变换和 Auto 变换的
+> 区别由每条 twiddle `dload` 的外存地址/重定位表表达。
+> 后端必须根据下述调用位置绑定普通表或 `k` 专用表，
+> 不能将 Auto 内的所有 `dload ..., p3, 1, 0` 统一解释为
+> 普通 twiddle。
+
+**Step 0: c0 的普通 NTT -> Auto-INTT(k)**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
 | Step 0 开头 | `POBJ_MOD_CTX (p4)` | 完整 Q 模表镜像 | 循环外仅加载一次 |
 | 每个 `q_i` | `SLOT_A (p0)` | `c0` 当前基分片 | 来自 `x_c0/x_offset` |
-| 每个 `q_i` | `TWIDDLE (p3)` | NTT `pre_twist` 和逐 stage twiddle | 当前为普通 NTT |
-| 每个 `q_i` | `TWIDDLE (p3)` | INTT 逐 stage twiddle 和 `post_untwist_scale` | 当前为普通 INTT，未融合 `auto_idx` |
+| 每个 `q_i` | `TWIDDLE (p3)` | 普通 NTT `pre_twist = psi^i` 和逐 stage twiddle | 先将 `c0` 转入普通 NTT 域，共 `1+logN` 次 twiddle `dload` |
+| 每个 `q_i` | `TWIDDLE (p3)` | `k` 对应的 Auto-INTT 逐 stage twiddle | 基础根/twiddle 按 `auto_idx=k` 变换，共 `logN` 次 `dload` |
+| 每个 `q_i` | `TWIDDLE (p3)` | `k` 对应的 Auto-INTT `post_untwist_scale` | 保留 `N^-1` 归一化，只对根的指数应用 `k` 变换；执行显式 `pmul` |
+
+Step 0 写回 `x_tmp_c0` 的语义是 `c0_auto = sigma_k(c0)`。
 
 **Step 1: ModUp**
 
@@ -269,20 +281,21 @@ Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphe
   `p4`=模表。当前 ModUp 会保留 source digit 并通过 BConv 补齐完整
   `Q∪P`，与后续全基遍历一致。
 
-**Step 2: NTT（注释称 Fused NTT Auto，但实现尚未使用 `auto_idx`）**
+**Step 2: Auto-NTT(k)**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
 | 当前 digit 的 Step 2 开头 | `POBJ_MOD_CTX (p4)` | 完整 `Q∪P` 模表镜像 | 循环外仅加载一次 |
 | 每个基 | `SLOT_A (p0)` | `ct1_up` 当前基分片 | ModUp 已产生完整 `Q∪P` 分片 |
-| 每个基 | `TWIDDLE (p3)` | NTT `pre_twist` 和逐 stage twiddle | 当前是普通 NTT，未融合 `auto_idx` |
+| 每个基 | `TWIDDLE (p3)` | Auto-NTT `pre_twist = psi^(k*i)` | 不能复用普通 `psi^i` pre-twist；加载后执行显式 `pmul` |
+| 每个基 | `TWIDDLE (p3)` | `k` 对应的 Auto-NTT 逐 stage twiddle | 每个基共 `logN` 次；与 pre-twist 一起产生 `NTT(sigma_k(ct1_up))` |
 
 **Step 3: Multiply & Accumulate with EVK**
 
 | 位置 | 目标槽位 | 加载内容 | 说明 |
 | --- | --- | --- | --- |
-| 每个基、每个 `v` | `SLOT_A (p0)` | `ct1_ntt` 当前基分片 | NTT 后 ct1 |
-| 每个基、每个 `v` | `SLOT_B (p1)` | `evk[v]` 当前基分片 | 评估密钥 |
+| 每个基、每个 `v` | `SLOT_A (p0)` | `ct1_ntt` 当前基分片 | Step 2 产生的 `NTT(sigma_k(ct1_up))` |
+| 每个基、每个 `v` | `SLOT_B (p1)` | `galois_key[k][v]` 当前 digit/基分片 | 必须与 `auto_idx=k` 及 Auto twiddle 的方向约定一致 |
 | 非首 digit | `SLOT_C (p2)` | 先前累加值 | 来自 `x_out`；首 digit 直接以 `p2` 作为 `pmul` 目标 |
 
 **Step 4: INTT**
@@ -291,7 +304,7 @@ Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphe
 | --- | --- | --- | --- |
 | Step 4 开头 | `POBJ_MOD_CTX (p4)` | 完整 `Q∪P` 模表镜像 | 两个 `v` 共用，仅加载一次 |
 | 每个基、每个 `v` | `SLOT_A (p0)` | `out[v]` 当前基分片 | 乘加后的结果 |
-| 每个基、每个 `v` | `TWIDDLE (p3)` | INTT 逐 stage twiddle 和 `post_untwist_scale` | 供普通 INTT 使用 |
+| 每个基、每个 `v` | `TWIDDLE (p3)` | 普通 INTT 逐 stage twiddle 和 `post_untwist_scale = N^-1 * psi^-i` | Auto 已在 Step 2 融合，此处使用普通 INTT，每个基共 `logN+1` 次 twiddle `dload` |
 
 **Step 5: ModDown**
 
@@ -303,9 +316,16 @@ Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphe
 | --- | --- | --- | --- |
 | Step 6 开头 | `POBJ_MOD_CTX (p4)` | 完整 Q 模表镜像 | 循环外仅加载一次 |
 | 每个 `q_i` | `SLOT_A (p0)` | `out0`（ModDown 后） | 当前基分片 |
-| 每个 `q_i` | `SLOT_B (p1)` | Step 0 暂存的 `c0` | 来自 `x_tmp_c0`；当前实现尚不能将它视为正确的 `c0_auto` |
+| 每个 `q_i` | `SLOT_B (p1)` | Step 0 暂存的 `c0_auto = sigma_k(c0)` | 来自 `x_tmp_c0` |
 
-`padd` 将合并结果写到 `SLOT_C (p2)`，随后以 `dstore rel=1` 导出。
+`padd` 将 `c0_auto` 与 KeySwitch 的第一 correction 分量合并到
+`SLOT_C (p2)`，随后以 `dstore rel=1` 导出。
+
+Auto twiddle 的指数方向和 Galois Key 必须使用同一 ABI
+约定。如果上层将逻辑旋转步数映射为 Galois element，或将
+`sigma_k` 实现为指数乘 `k^-1` 的等价方向，该映射必须在
+twiddle 资产和 `galois_key[k]` 资产生成时一次性固定；不改变本节
+记录的 `dload`/`pntt`/`pintt` 指令顺序。
 
 ---
 
