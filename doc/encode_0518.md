@@ -4,7 +4,7 @@
 > 符号寄存器和“不可执行”的结论不再描述当前实现。当前状态以 README、
 > `doc/HPU_PROGRAMMING_MANUAL.md` 和 Nexus-AM resolved relocation manifest 为准。
 
-本文件记录编码链路接入工作，并按 2026 年 7 月 23 日的当前工程结构说明 HPU 指令生成、32-bit RV 指令、26-bit HPU 命令、FHE 软件 reference 和测试数据交付流程。
+本文件记录编码链路接入工作；当前状态说明已更新到 2026 年 8 月 21 日，用于描述 HPU 指令生成、32-bit RV 指令、26-bit HPU 命令、FHE 软件 reference 和测试数据交付流程。
 
 ## 1. 当前结论
 
@@ -134,12 +134,12 @@ outputs/<case>/
 
 | 算子 | ASM | `.inst32` / `.cmd26` | reference test data |
 | --- | --- | --- | --- |
-| `ntt/intt/encode/rescale/mm/bconv/pmult/cmult/modup/moddown/keyswitch/relinearization` | 已生成 | 已生成 | 已生成 |
+| `ntt/intt/encode/rescale/mm/bconv/pmult/cmult/modup/moddown/keyswitch/relinearization/auto` | 已生成 | 已生成 | 已生成 |
 | `ciphertext_multiply` | 已生成 | 已生成 | 已生成完整 FHE 流程数据 |
-| `auto` | 已生成 | 显式跳过 | `STATUS.md` 记录阻塞项 |
 | `rv_interface_smoke` | 已生成 | 已生成 | decode 期望与非法输入用例 |
 
-`auto` 的 ASM 仍含 `x_c0`、`x_offset`、`x_out` 等符号 DMA 寄存器，完成物理寄存器分配前不能可靠编码。
+当前所有可编码算子的 custom1 指令均固定使用 `x10/x11`，实际 line offset/count
+由 runtime 的 DMA span 在发射前写入；Auto 已进入同一编码和 relocation 链路。
 
 ## 6. 参数配置
 
@@ -152,11 +152,17 @@ outputs/<case>/
 
 ## 7. 当前交付边界
 
-软件侧已经完成指令生成、`.inst32`/`.cmd26` 编码、完整密文乘法与重线性化 reference、算子 UT 数据和 RV 接口冒烟流。以下信息仍需硬件侧确认后才能把当前计算顺序流变成可直接执行程序：
+软件侧已经完成指令生成、`.inst32`/`.cmd26` 编码、完整密文乘法与重线性化
+reference、算子 UT 数据、RV 接口冒烟流，以及 Nexus-AM runtime 中的逐条 DMA
+span、scratch、HPU_MEM CSR、cache、FAULT/IRQ 绑定。当前不再存在 `x0/x0` 或
+Auto 符号 DMA 寄存器阻塞项。
 
-1. `dload/dstore` 的 DDR 地址寄存器和偏移 ABI；当前完整乘法中仍使用 `x0/x0` 占位。
-2. runtime 按已冻结的 `GPR[rs1]=line_offset`、`GPR[rs2]=line_count`（256B line 单位）完成 `line_map.csv` 到每条 DMA 指令的重定位，以及 RTL 对 `q32+mu48+reserved48` mod context 和每 stage `N/2` 个 group-major DIT twiddle 的签字。
-3. HPU SRAM/scratch 容量、对象槽位驻留规则，以及 `pfree`/`dstore rel=1` 的释放完成时机。
-4. runtime 如何把生成的 HPU_MEM line offset/count 写入 `dload/dstore` 使用的寄存器，以及异常上报规则。
+剩余条件只有目标 RTL/板级执行和外部 monitor 证据。Host `PASS_PROBE` 自检只证明
+testcase、oracle、relocation 与 guard 自洽，不能代替硬件算术验收。测试向量采用
+确定性零噪声功能密钥，不用于安全性或噪声预算验证。
+
+此外，`outputs/` 是被 `.gitignore` 忽略的生成目录，正式交付必须整体归档并附带
+源码 commit、归档 SHA-256 和 `DELIVERY_REPORT.txt`，不能只发送仓库 commit，
+也不能混合不同生成批次的数据、指令和 relocation manifest。
 
 完整验收项和硬件联调签字表见 `doc/HPU_TEST_DELIVERY.md`。

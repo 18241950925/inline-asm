@@ -120,6 +120,7 @@ ctest --test-dir build --output-on-failure
 - `outputs/rv_interface_smoke/`
 
 例如 `outputs/ntt/` 下会包含：
+
 - `ntt.cpp`
 - `ntt.asm`
 - `ntt.inst32`（运行编码工具后生成）
@@ -129,6 +130,12 @@ ctest --test-dir build --output-on-failure
 - `test_data/params.json`、`test_data/artifact_manifest.csv`
 - `test_data/hardware/hpu_mem_image.u32.bin`、`line_map.csv`、`hpu_mem_config.json`
 - `test_data/hardware/mod_ctx_map.csv`、`twiddle_map.csv`、`abi.json`
+
+`outputs/` 是 `hpu_delivery` 生成的交付产物，当前被 `.gitignore` 忽略；仅向测试
+同学发送 Git commit 或让其重新 clone 本仓库不会包含这些数据。正式交付应在同一
+次 `hpu_delivery` 成功后整体归档 `outputs/`，同时记录源码 commit、归档
+SHA-256 和 `outputs/DELIVERY_REPORT.txt`。不得混合不同生成批次的指令、
+relocation manifest、line map 与 HPU_MEM 镜像。
 
 ---
 
@@ -205,3 +212,8 @@ ctest --test-dir build --output-on-failure
 ## 6. 当前交付边界
 
 软件侧已完成指令生成、编码、完整密文乘法/重线性化 reference golden、独立 `uint32` 硬件镜像、`q32+mu48+reserved48` 模上下文、每 stage 固定 `N/2` 个物理 twiddle、显式 negacyclic pre/post factor、256B line 映射、类型化 DMA span、生命周期门禁和 RV 可执行后端。Nexus-AM IT runtime 已完成 HPU_MEM CSR、cache、FAULT/IRQ、scratch 与 DMA relocation 绑定；硬件 qualification 仍需目标 RTL/板级运行和外部 monitor 证据。详细签字项见 `doc/HPU_TEST_DELIVERY.md`。
+
+当前 golden 使用确定性零噪声和 P 可整除的功能测试评估密钥，适合 UT/IT 的
+逐字定位，不是安全性或噪声预算测试向量。Nexus-AM 的 host 模式只验证 testcase、
+oracle、relocation 和内存边界自洽；目标算术是否通过必须以 RISC-V 路径在目标
+RTL/板级执行后的逐字比对、FAULT/IRQ 状态和外部 monitor 记录为准。

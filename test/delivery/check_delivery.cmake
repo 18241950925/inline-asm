@@ -580,7 +580,8 @@ file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "RELINEARIZATION_REUSES_KEYSWITCH=PASS\n"
     "RELINEARIZATION_INST32_COUNT=${RELIN_INST32_COUNT}\n"
     "CIPHERTEXT_MULTIPLY_INST32_COUNT=${INST32_COUNT}\n"
+    "TEST_VECTOR_SCOPE=FUNCTIONAL_ONLY\n"
     "HARDWARE_EXECUTION=CONDITIONAL\n"
-    "PENDING=semantic DMA span binding, scratch map, target hardware evidence\n")
+    "PENDING=target RTL/board execution and external monitor evidence\n")
 
 message(STATUS "HPU software delivery check PASS (${INST32_COUNT} ciphertext-multiply instructions)")

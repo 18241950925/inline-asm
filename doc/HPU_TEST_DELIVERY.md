@@ -2,7 +2,7 @@
 
 ## 1. 交付结论
 
-本仓库已形成可复现的软件交付闭环：生成 HPU 算子指令流、编码为 32-bit RV 指令和 26-bit HPU 命令、生成完整密文乘法及重线性化的 RNS golden 数据、执行软件解密校验，并生成 RV 接口冒烟用例。
+本仓库已形成可复现的软件交付闭环：生成 HPU 算子指令流、编码为 32-bit RV 指令和 26-bit HPU 命令、生成完整密文乘法及重线性化的 RNS golden 数据、执行软件解密校验，并生成 RV 接口冒烟用例。当前数据可交付给 IT 开展确定性功能联调；“数据可交付”不等于“目标硬件 qualification 已通过”。
 
 一键生成和验收：
 
@@ -33,10 +33,32 @@ MOD_TABLE_BASE_0X1400=PASS
 STAGE_TWIDDLE_LAYOUT=PASS
 NEGACYCLIC_FACTORS_EXPLICIT=PASS
 NTT_PHYSICAL_OUT_OF_PLACE=PASS
+TEST_VECTOR_SCOPE=FUNCTIONAL_ONLY
 HARDWARE_EXECUTION=CONDITIONAL
+PENDING=target RTL/board execution and external monitor evidence
 ```
 
 `HARDWARE_EXECUTION=CONDITIONAL` 不是算法或数据失败。`uint32` 镜像、256B line、`mod_ctx`、twiddle、`.cmd26`、custom1 sideband、类型化 DMA span 和 CSR 偏移均已生成或冻结；生成的 C 后端在每条 DMA 前绑定 `x10/x11`。Nexus-AM IT runtime 已解析实际 line offset/count、scratch、cache、FAULT/IRQ 和 HPU_MEM window。这里剩余的条件是目标 RTL/板级执行及 monitor 证据，而不是软件 DMA 占位。
+
+Nexus-AM host 用例属于 `PASS_PROBE` 自检：非 RISC-V 分支把嵌入镜像中的 golden
+复制到输出区，再检查 manifest、输出边界和 guard，因此 CTest 应将其显示为
+`qualification-pending/Skipped`。它可以证明测试程序和数据组织自洽，但不能作为
+HPU 算术通过证据。目标证据必须来自 RISC-V 分支真正发出的 HPU 程序。
+
+### 1.1 2026-08-21 审计基线
+
+| 检查项 | 结果 |
+| --- | --- |
+| 算子数据包 | 14 个：NTT、INTT、Encode、Rescale、MM、BConv、PMULT、CMULT、ModUp、ModDown、Auto、KeySwitch、Relinearization、CiphertextMultiply |
+| 数学与硬件文件 | 所有 manifest 路径、字节数、FNV-1a、256B line geometry、主镜像切片和连续 line map 均通过 |
+| Nexus-AM 同步副本 | 14 份完整 `outputs/` 与当前生成结果一致 |
+| 生成算子 relocation | 11 份 manifest 的源/解析行数一致，全部 `RESOLVED`；最大 `end_line_exclusive=19137 < 19201` |
+| 本仓库自检 | reference/encode 共 2 项通过 |
+| Nexus-AM host 自检 | 53 项无内部失败，但 53 项均按 `PASS_PROBE` 标为 `qualification-pending/Skipped` |
+
+NTT、INTT 和 BConv 使用 Nexus-AM 的专用 transform/BConv testcase，而不是通用
+generated-operator relocation manifest；这不影响其独立数据包交付，但两种覆盖
+方式不能在统计时混为一谈。
 
 ## 2. 程序入口与执行顺序
 
@@ -56,6 +78,20 @@ HARDWARE_EXECUTION=CONDITIONAL
 - `test/reference/main.cpp`：软件 reference 参数 `kN/kNumQ/kNumP/kDnum/kPlainModulus/kSeed`。
 
 `outputs/*/test_data/params.json` 是 reference 写出的结果清单，不是配置入口。修改它不会影响生成逻辑，并会在下一次执行 `hpu_delivery` 时被覆盖。
+
+### 2.1 正式交付包
+
+`outputs/` 是生成目录并被 `.gitignore` 忽略，Git clone 不会携带其中约定的指令和
+测试数据。向 IT 正式交付时必须：
+
+1. 从同一源码 commit 执行完整 `hpu_delivery`，不得单独手改 `outputs/`。
+2. 整体归档 `outputs/`，保留各算子的 `artifact_manifest.csv`、
+   `hardware_manifest.csv`、`line_map.csv`、`hpu_mem_config.json`、指令文件和
+   `DELIVERY_REPORT.txt`。
+3. 随包记录源码 commit 与归档 SHA-256；指令、resolved relocation manifest 和
+   HPU_MEM 镜像必须来自同一生成批次。
+4. 如果同时交付 Nexus-AM IT runtime，应将它作为受版本控制的独立交付物，并附带
+   对应源码 fingerprint、内存 profile 和逐条 resolved relocation manifest。
 
 ## 3. FHE 算法流程
 
@@ -155,12 +191,30 @@ group-major butterfly 顺序展开为固定 `N/2` 个 `uint32`，即 `N/128` 条
 
 建议 RV 接口 IT 依次验证 decode 路由、队列 backpressure、顺序发射、`dload -> pmodld -> compute` 的硬件一致性、`dload -> compute -> pfree/dstore rel=1` ownership，以及末尾 `psync` 的 CPU 完成通知。`pfree` 必须在目标对象最后一次使用后生效；已经由 `dstore rel=1` 释放的对象不得重复释放。
 
-## 7. 硬件联调前置确认
+## 7. 硬件联调边界
 
-以下前四项仍需由控制逻辑、SRAM、DMA 和软件负责人共同签字确认，确认后才能把当前交付从“软件可验收”升级为“硬件可直接运行”。第 5 项记录硬件负责人已经确认的 `psync` 与 DMA 一致性口径：
+软件与 Nexus-AM IT runtime 已完成以下事项，不再列为 pending：
 
-1. runtime 按已冻结的 `GPR[rs1]=line_offset`、`GPR[rs2]=line_count` 语义，将 `line_map.csv` 的具体值绑定到每条 DMA 指令。
-2. RTL 接受 V1 `mod_ctx = {reserved48, mu48, q32}`、32-line Bank 5 与固定 `MOD_TABLE_BASE_LINE=0x1400`。
-3. RTL 的 `pntt/pintt stage` 接受 `twiddle_map.csv` 的 `N/2` group-major DIT 次序、物理 out-of-place 提交，以及显式 pre/post PMUL；当前数据为 canonical residue，不是 Montgomery 域。
-4. ct、tensor、ModUp、rlk、KeySwitch scratch 的物理地址，以及 RTL 对 `pfree` 和 `dstore rel=1` 生命周期语义的实现。
-5. `psync` 只放在整个程序的最后，用于向 CPU 报告程序完成；DMA 一致性由硬件维护，算子内部不插入 `psync` 等待 DMA。
+1. 按 `GPR[rs1]=line_offset`、`GPR[rs2]=line_count` 的 256B-line ABI，将
+   `line_map.csv` 的实际编号逐条绑定到 `dload/dstore`，并输出 resolved relocation
+   manifest；每条记录都必须是 `RESOLVED`。
+2. 为 ct、tensor、ModUp、rlk、KeySwitch 等中间对象分配 scratch，并在提交前检查
+   整个 span 不超过 HPU_MEM window；当前 profile 为 19201 line，末尾 64 line
+   保留为越界 guard。
+3. 配置 HPU_MEM CSR，执行提交前 cache clean、读回前 invalidate，并处理
+   `HPU_STATUS`、`HPU_FAULT_STATUS`、W1C fault 和完成 IRQ。
+4. `psync` 只放在完整程序末尾，用于向 CPU 报告程序完成；算子内部不把它作为
+   DMA 等待或阶段屏障。
+
+硬件 qualification 仍需 IT 在目标 RTL/板级确认并留存以下证据：
+
+1. RTL 正确接受 V1 `mod_ctx = {reserved48, mu48, q32}`、32-line Bank 5 与固定
+   `MOD_TABLE_BASE_LINE=0x1400`。
+2. `pntt/pintt stage` 按 `twiddle_map.csv` 的 `N/2` group-major DIT 次序执行，
+   采用物理 out-of-place 提交和显式 pre/post PMUL；当前数据为 canonical residue，
+   不是 Montgomery 域。
+3. DMA、allocator 和 PE 对 `pfree`、`dstore rel=1`、对象生命周期、FAULT/IRQ 的
+   目标实现与软件 ABI 一致。
+4. 目标输出逐字等于 golden，尾部 guard 未被改写，并提供外部 monitor/波形或板端
+   日志。只有这些证据完成后，才可把 `HARDWARE_EXECUTION` 从 `CONDITIONAL`
+   升级为 `PASS`。
