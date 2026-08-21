@@ -14,6 +14,8 @@
 #include "operator/keyswitch.hpp"
 #include "operator/relinearization.hpp"
 #include "operator/ciphertext_multiply.hpp"
+#include "operator/encode.hpp"
+#include "operator/rescale.hpp"
 
 namespace {
 
@@ -101,6 +103,16 @@ struct CiphertextMultiplyConfig {
 	int dnum;
 };
 
+struct EncodeConfig {
+	int N;
+	int num_q;
+};
+
+struct RescaleConfig {
+	int num_q;
+	int num_components;
+};
+
 constexpr NttConfig kNttCfg{4096, 0, 1, 2};
 constexpr MmConfig kMmCfg{0, 1, 2, 3};
 // 为了缩短独立 BConv 示例，采用 num_q = num_p = 1；模上下文使用独立 8-bit MOD_ID
@@ -110,6 +122,40 @@ constexpr CmultConfig kCmultCfg{4, 0, 1, 2, 3, 4, 5, 6, 7};
 constexpr ModdownConfig kModdownCfg{4, 3, 0, 1, 2, 3, 4, 5, 6, 7};
 constexpr AutoConfig kAutoCfg{4096, 4, 3, 2, 1};
 constexpr CiphertextMultiplyConfig kCiphertextMultiplyCfg{4096, 4, 3, 2};
+constexpr EncodeConfig kEncodeCfg{4096, 4};
+constexpr RescaleConfig kRescaleCfg{4, 2};
+
+void test_encode_codegen()
+{
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::ofstream("output/encode.cpp")
+			<< generate_hpu_encode_asm(kEncodeCfg.N, kEncodeCfg.num_q, true);
+		std::cout << "Saved encode ASM to output/encode.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::ofstream("output/encode.asm")
+			<< generate_hpu_encode_body_asm(kEncodeCfg.N, kEncodeCfg.num_q, true);
+		std::cout << "Saved encode body ASM to output/encode.asm\n";
+	}
+}
+
+void test_rescale_codegen()
+{
+	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
+		std::ofstream("output/rescale.cpp")
+			<< generate_hpu_rescale_asm(
+				kRescaleCfg.num_q, kRescaleCfg.num_components, true);
+		std::cout << "Saved rescale ASM to output/rescale.cpp\n";
+	}
+
+	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
+		std::ofstream("output/rescale.asm")
+			<< generate_hpu_rescale_body_asm(
+				kRescaleCfg.num_q, kRescaleCfg.num_components, true);
+		std::cout << "Saved rescale body ASM to output/rescale.asm\n";
+	}
+}
 
 void test_intt_codegen() {
 	if (g_output_mode == OutputMode::CPP || g_output_mode == OutputMode::BOTH) {
@@ -414,6 +460,8 @@ int main(int argc, char* argv[])
 	std::filesystem::create_directory("output");
 	test_ntt_codegen();
 	test_intt_codegen();
+	test_encode_codegen();
+	test_rescale_codegen();
 	test_mm_codegen();
 	test_bconv_codegen();
 	test_pmult_codegen();

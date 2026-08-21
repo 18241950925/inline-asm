@@ -24,6 +24,8 @@ add_executable(inline_asm_codegen
         src/operator/keyswitch.cpp
         src/operator/relinearization.cpp
         src/operator/ciphertext_multiply.cpp
+        src/operator/encode.cpp
+        src/operator/rescale.cpp
 )
 
 target_include_directories(inline_asm_codegen

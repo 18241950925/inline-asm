@@ -14,6 +14,8 @@ namespace {
 const std::vector<std::string> kEncodableOutputs{
     "ntt",
     "intt",
+    "encode",
+    "rescale",
     "mm",
     "bconv",
     "pmult",
@@ -29,6 +31,8 @@ const std::vector<std::string> kEncodableOutputs{
 const std::vector<std::string> kAllOutputs{
     "ntt",
     "intt",
+    "encode",
+    "rescale",
     "mm",
     "bconv",
     "pmult",

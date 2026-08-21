@@ -457,6 +457,61 @@ BasisPoly moddown(const BasisPoly& input_qp,
     return out;
 }
 
+BasisPoly rescale_drop_last(const BasisPoly& input_q,
+                            const std::vector<U64>& q_moduli)
+{
+    if (q_moduli.size() < 2 || input_q.size() != q_moduli.size()) {
+        throw std::runtime_error("rescale requires matching Q basis with at least two limbs");
+    }
+
+    const U64 dropped_modulus = q_moduli.back();
+    const U64 half = dropped_modulus / 2;
+    BasisPoly rounded_numerator = input_q;
+    for (std::size_t basis = 0; basis < q_moduli.size(); ++basis) {
+        const U64 modulus = q_moduli[basis];
+        for (U64& coefficient : rounded_numerator[basis]) {
+            coefficient = add_mod(coefficient, half % modulus, modulus);
+        }
+    }
+
+    const std::vector<U64> retained_moduli(q_moduli.begin(), q_moduli.end() - 1);
+    return moddown(rounded_numerator, retained_moduli, {dropped_modulus});
+}
+
+BasisPoly direct_rounded_divide_last(const BasisPoly& input_q,
+                                     const std::vector<U64>& q_moduli)
+{
+    if (q_moduli.size() < 2 || input_q.size() != q_moduli.size()) {
+        throw std::runtime_error("direct rescale check requires a matching Q basis");
+    }
+
+    BasisPoly out(q_moduli.size() - 1, Poly(kN));
+    const U64 dropped_modulus = q_moduli.back();
+    for (std::size_t coefficient = 0; coefficient < kN; ++coefficient) {
+        U128 value = 0;
+        U128 product = 1;
+        for (std::size_t basis = 0; basis < q_moduli.size(); ++basis) {
+            const U64 modulus = q_moduli[basis];
+            const U64 value_mod = static_cast<U64>(value % modulus);
+            const U64 delta = sub_mod(
+                input_q[basis][coefficient], value_mod, modulus);
+            const U64 product_inverse = inverse_mod(
+                static_cast<U64>(product % modulus), modulus);
+            const U64 digit = mul_mod(delta, product_inverse, modulus);
+            value += product * digit;
+            product *= modulus;
+        }
+
+        const U128 rounded =
+            (value + dropped_modulus / 2) / dropped_modulus;
+        for (std::size_t basis = 0; basis + 1 < q_moduli.size(); ++basis) {
+            out[basis][coefficient] =
+                static_cast<U64>(rounded % q_moduli[basis]);
+        }
+    }
+    return out;
+}
+
 Poly apply_negacyclic_automorphism(const Poly& input,
                                    U64 galois_element,
                                    U64 modulus)
@@ -1304,6 +1359,13 @@ void generate(const std::filesystem::path& output_root,
     const BasisPoly plaintext_b_q = encode_basis(message_b, q_moduli);
     const BasisPoly plaintext_b_ntt = transform_basis(
         plaintext_b_q, q_moduli, q_roots, false);
+    Ciphertext rescaled_ct_a;
+    for (std::size_t component = 0; component < 2; ++component) {
+        rescaled_ct_a[component] = rescale_drop_last(ct_a[component], q_moduli);
+        verify_equal(rescaled_ct_a[component],
+                     direct_rounded_divide_last(ct_a[component], q_moduli),
+                     "rounded rescale direct CRT check");
+    }
     Ciphertext pmult_ntt;
     for (std::size_t component = 0; component < 2; ++component) {
         pmult_ntt[component].resize(kNumQ);
@@ -1699,6 +1761,7 @@ void generate(const std::filesystem::path& output_root,
     write_text(output_root / "README.md", readme);
     write_text(output_root / "VALIDATION.txt",
                "PASS\nrelinearized_decryption == tensor_decryption\n"
+               "rescale_moddown == direct_rounded_CRT_division\n"
                "decoded_plaintext == negacyclic(message_a * message_b) mod 257\n");
 
     if (suite_root != nullptr) {
@@ -1739,6 +1802,78 @@ void generate(const std::filesystem::path& output_root,
                            common_params("intt", "NTT", "coefficient", {q_moduli[0]}),
                            std::move(case_artifacts),
                            {q_moduli[0]}, {q_roots[0]});
+
+        case_artifacts.clear();
+        words.clear(); append_words(words, plaintext_b_q);
+        add_artifact(case_artifacts, "input_coeff_q.bin",
+                     "host signed-to-RNS plaintext, coefficient domain",
+                     {kNumQ, kN}, std::move(words),
+                     {"basis_q", "coefficient"});
+        words.clear(); append_words(words, plaintext_b_ntt);
+        add_artifact(case_artifacts, "expected_ntt_q.bin",
+                     "encoded plaintext ready for PMult, NTT domain",
+                     {kNumQ, kN}, std::move(words),
+                     {"basis_q", "coefficient"});
+        write_case_package(*suite_root, "encode",
+                           common_params("encode",
+                                         "host-signed-to-RNS/coefficient/Q",
+                                         "plaintext/NTT/Q", q_moduli),
+                           std::move(case_artifacts), q_moduli, q_roots);
+
+        case_artifacts.clear();
+        words.clear(); append_words(words, ct_a[0]); append_words(words, ct_a[1]);
+        add_artifact(case_artifacts, "input_q.bin",
+                     "two-component ciphertext before rounded level drop",
+                     {2, kNumQ, kN}, std::move(words),
+                     {"component[c0,c1]", "basis_q", "coefficient"});
+
+        BasisPoly half_constants(kNumQ, Poly(kN));
+        const U64 dropped_modulus = q_moduli.back();
+        const U64 half = dropped_modulus / 2;
+        for (std::size_t basis = 0; basis < kNumQ; ++basis) {
+            std::fill(half_constants[basis].begin(), half_constants[basis].end(),
+                      half % q_moduli[basis]);
+        }
+        words.clear(); append_words(words, half_constants);
+        add_artifact(case_artifacts, "constants/q_last_half_mod_q.bin",
+                     "floor(q_last/2) reduced in every Q context",
+                     {kNumQ, kN}, std::move(words),
+                     {"basis_q", "coefficient"});
+
+        add_artifact(case_artifacts, "constants/qhat_inv_drop.bin",
+                     "single-source BConv qhat inverse (all ones)",
+                     {1, kN}, Poly(kN, 1),
+                     {"source_basis", "coefficient"});
+        BasisPoly qhat_mod_qprime(kNumQ - 1, Poly(kN, 1));
+        words.clear(); append_words(words, qhat_mod_qprime);
+        add_artifact(case_artifacts, "constants/qhat_mod_qprime.bin",
+                     "single-source BConv qhat residues (all ones)",
+                     {kNumQ - 1, kN}, std::move(words),
+                     {"target_basis_qprime", "coefficient"});
+
+        BasisPoly dropped_inverse(kNumQ - 1, Poly(kN));
+        for (std::size_t basis = 0; basis + 1 < kNumQ; ++basis) {
+            std::fill(dropped_inverse[basis].begin(), dropped_inverse[basis].end(),
+                      inverse_mod(dropped_modulus % q_moduli[basis], q_moduli[basis]));
+        }
+        words.clear(); append_words(words, dropped_inverse);
+        add_artifact(case_artifacts, "constants/q_last_inv_mod_qprime.bin",
+                     "q_last inverse in every retained Q context",
+                     {kNumQ - 1, kN}, std::move(words),
+                     {"basis_qprime", "coefficient"});
+
+        words.clear();
+        append_words(words, rescaled_ct_a[0]);
+        append_words(words, rescaled_ct_a[1]);
+        add_artifact(case_artifacts, "expected_qprime.bin",
+                     "rounded ciphertext after dropping q_last",
+                     {2, kNumQ - 1, kN}, std::move(words),
+                     {"component[c0,c1]", "basis_qprime", "coefficient"});
+        write_case_package(*suite_root, "rescale",
+                           common_params("rescale",
+                                         "ciphertext/coefficient/Q",
+                                         "ciphertext/coefficient/Q_without_last", q_moduli),
+                           std::move(case_artifacts), q_moduli, q_roots);
 
         case_artifacts.clear();
         add_artifact(case_artifacts, "input_a.bin", "left polynomial", {kN}, ct_a_ntt[0][0]);

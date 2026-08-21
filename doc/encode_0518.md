@@ -112,7 +112,7 @@ outputs/<case>/
 
 具体文件名随算子变化。顶层 `.bin` 是小端 `uint64_t` 数学 golden，不直接作为 HPU load image；`hardware/` 下的 `.u32.bin` 才是 64×32-bit、每 line 256B 的硬件镜像。两类数据都有带用途、shape 和分块注释的 `.hex.txt` 人工可读版本；两个 manifest 分别记录逻辑 golden 与物理镜像的大小和校验值。
 
-当前覆盖目录包括 `ntt`、`intt`、`mm`、`bconv`、`pmult`、`cmult`、`modup`、`moddown`、`keyswitch`、`relinearization`、`auto`、`ciphertext_multiply` 和 `rv_interface_smoke`。
+当前覆盖目录包括 `ntt`、`intt`、`encode`、`rescale`、`mm`、`bconv`、`pmult`、`cmult`、`modup`、`moddown`、`keyswitch`、`relinearization`、`auto`、`ciphertext_multiply` 和 `rv_interface_smoke`。
 
 完整密文乘法目录额外包含：
 
@@ -134,7 +134,7 @@ outputs/<case>/
 
 | 算子 | ASM | `.inst32` / `.cmd26` | reference test data |
 | --- | --- | --- | --- |
-| `ntt/intt/mm/bconv/pmult/cmult/modup/moddown/keyswitch/relinearization` | 已生成 | 已生成 | 已生成 |
+| `ntt/intt/encode/rescale/mm/bconv/pmult/cmult/modup/moddown/keyswitch/relinearization` | 已生成 | 已生成 | 已生成 |
 | `ciphertext_multiply` | 已生成 | 已生成 | 已生成完整 FHE 流程数据 |
 | `auto` | 已生成 | 显式跳过 | `STATUS.md` 记录阻塞项 |
 | `rv_interface_smoke` | 已生成 | 已生成 | decode 期望与非法输入用例 |

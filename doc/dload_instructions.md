@@ -145,6 +145,66 @@ BConv 生成 `Q\digit ∪ P`：
 
 ---
 
+## `generate_hpu_encode_body_asm`
+来源: [`src/operator/encode.cpp`](../src/operator/encode.cpp)
+
+这里的 Encode 与仓库 reference 的 `encode_basis` 对齐：宿主先把有符号整数
+逐系数嵌入每个 Q 模数，HPU 接收 `[num_q, N]` 的系数域 RNS-Q 明文并逐 limb
+执行负循环 NTT。当前 ISA 不负责从单份 `mod t` 余数判断正负，也不实现 CKKS
+复数槽位 FFT。
+
+| 位置 | 目标槽位 | 加载内容 | 实际编号/说明 |
+| --- | --- | --- | --- |
+| 算子开头 | `POBJ_MOD_CTX (p4)` | 完整 Q 模表 | `dload x10,x11,p4,2,1`，仅一次 |
+| 每个 `q_i` | `POBJ_PLAINTEXT (p0)` | `input_coeff_q[i]` | 宿主已完成 signed-to-RNS 的系数域 limb |
+| 每个 `q_i` NTT 前 | `POBJ_TWIDDLE (p3)` | `pre_twist[i]` | 由 NTT body 加载，随后 `pmul p0,p0,p3` |
+| 每个 `q_i`、每个 stage | `POBJ_TWIDDLE (p3)` | `ntt/basis_i/stage_s` | `s=0..logN-1` |
+
+每个 limb 的结果从 `p0` 以 `dstore rel=1` 写入 `expected_ntt_q[i]`。当前
+`N=4096,Q=4` 的完整流依次处理 `q_0..q_3`，最后释放 `p4` 并发出唯一的
+`psync`。
+
+---
+
+## `generate_hpu_rescale_body_asm`
+来源: [`src/operator/rescale.cpp`](../src/operator/rescale.cpp)
+
+Rescale 输入是 `[component, Q, coefficient]` 的系数域密文。当前独立配置为
+`num_q=4,num_components=2`，丢弃 `q_3`，输出两个分量的 `Q'={q_0,q_1,q_2}`。
+每个分量先生成 `x + floor(q_3/2)` 的 Q4 scratch，再复用
+`generate_hpu_moddown_body_asm(3,1)` 完成 `BConv(q_3 -> Q')`、相减和乘
+`q_3^{-1}`。
+
+**舍入预处理（每个 component、每个 `q_i`）：**
+
+| 目标槽位 | 加载内容 | 当前实际编号 |
+| --- | --- | --- |
+| `POBJ_MOD_CTX (p4)` | 完整 Q4 模表 | context `0,1,2,3` 对应 `q_0,q_1,q_2,q_3` |
+| `POBJ_VALUE (p0)` | `input_q[component][i]` | 当前输入 limb |
+| `POBJ_HALF (p1)` | `floor(q_3/2) mod q_i` | `constants/q_last_half_mod_q[i]` |
+
+`padd p0,p0,p1` 后释放 `p1`，并把 `p0` 写入 rounded-numerator scratch。
+
+**复用 ModDown 的阶段（每个 component）：**
+
+| 阶段 | 目标槽位 | 加载内容 | 当前实际编号/含义 |
+| --- | --- | --- | --- |
+| BConv Stage 1 | `p4` | 完整 Q4 模表 | source context 为 `3` (`q_3`) |
+| BConv Stage 1 | `p0` | rounded scratch 的 `q_3` limb | 被丢弃 limb |
+| BConv Stage 1 | `p1` | `qhat_inv_drop` | 单元素 source basis，值恒为 1 |
+| BConv Stage 2 | `p0` | Stage 1 的 `x_j` | 当前临时值 |
+| BConv Stage 2 | `p1` | `qhat_mod_qprime[i]` | 单元素 source basis，值恒为 1 |
+| BConv Stage 2 | `p2` | BConv 累加目标 | 写出 correction `[q_0,q_1,q_2]` |
+| ModDown Stage 2 | `p0` | rounded scratch 的当前 `q_i` limb | `i=0,1,2` |
+| ModDown Stage 2 | `p1` | correction 当前 limb | `BConv(q_3 -> q_i)` 输出 |
+| ModDown Stage 2 | `p2` | `q_3^{-1} mod q_i` | `constants/q_last_inv_mod_qprime[i]` |
+
+因此最终写回值为
+`((x + floor(q_3/2)) - BConv_q3(x + floor(q_3/2))) * q_3^{-1} mod q_i`。
+两个 component 完成后才发出唯一 `psync`。
+
+---
+
 ## `generate_hpu_keyswitch_body_asm`
 来源: [`src/operator/keyswitch.cpp`](../src/operator/keyswitch.cpp)
 

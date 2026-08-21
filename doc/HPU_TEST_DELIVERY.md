@@ -140,7 +140,7 @@ group-major butterfly 顺序展开为固定 `N/2` 个 `uint32`，即 `N/128` 条
 | `ciphertext_out_q` | 最终 `padd`、输出 component 顺序 |
 | 最终解密 | 上述节点均通过时再检查方案参数和 host 数据解释 |
 
-同一 reference 还会拆分到 `outputs/{ntt,intt,mm,bconv,modup,pmult,cmult,moddown,keyswitch,relinearization}/test_data/`。每个目录均包含独立 `params.json`、数学输入/期望输出、checksum，以及完整的 `hardware/` 镜像、上下文、twiddle 和 line map，可直接交给对应模块负责人跑 UT。`auto` 当前无法完成物理寄存器编码，其阻塞原因记录在 `outputs/auto/test_data/STATUS.md`。
+同一 reference 还会拆分到 `outputs/{ntt,intt,encode,rescale,mm,bconv,modup,pmult,cmult,moddown,keyswitch,relinearization,auto}/test_data/`。每个目录均包含独立 `params.json`、数学输入/期望输出、checksum，以及完整的 `hardware/` 镜像、上下文、twiddle 和 line map，可直接交给对应模块负责人跑 UT。Encode 的宿主 signed-to-RNS 边界和 Rescale 的 rounded drop-last 语义分别冻结在各自 `params.json` 与 `doc/dload_instructions.md` 中。
 
 ## 6. RV 接口用例
 

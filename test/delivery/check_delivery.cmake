@@ -41,9 +41,15 @@ set(REQUIRED_FILES
     "outputs/rv_interface_smoke/test_data/negative_cases.asm.txt"
     "outputs/intt/test_data/input.hex.txt"
     "outputs/intt/test_data/expected.hex.txt"
+    "outputs/encode/test_data/input_coeff_q.bin"
+    "outputs/encode/test_data/expected_ntt_q.bin"
+    "outputs/rescale/test_data/input_q.bin"
+    "outputs/rescale/test_data/constants/q_last_half_mod_q.bin"
+    "outputs/rescale/test_data/constants/q_last_inv_mod_qprime.bin"
+    "outputs/rescale/test_data/expected_qprime.bin"
 )
 
-foreach(CASE_NAME ntt intt mm bconv modup pmult cmult moddown keyswitch relinearization)
+foreach(CASE_NAME ntt intt encode rescale mm bconv modup pmult cmult moddown keyswitch relinearization)
     list(APPEND REQUIRED_FILES
         "outputs/${CASE_NAME}/test_data/params.json"
         "outputs/${CASE_NAME}/test_data/artifact_manifest.csv"
@@ -307,6 +313,53 @@ if(INTT_STAGE_POSITION EQUAL -1
     message(FATAL_ERROR "INTT stream does not execute normalization/inverse twist after its stages")
 endif()
 
+file(READ "${ROOT}/output/encode.asm" ENCODE_ASM)
+string(FIND "${ENCODE_ASM}"
+    "ENCODE: host signed-to-RNS input -> NTT plaintext" ENCODE_BOUNDARY_POSITION)
+string(FIND "${ENCODE_ASM}"
+    "Negacyclic pre-twist: explicit PMUL" ENCODE_NTT_POSITION)
+if(ENCODE_BOUNDARY_POSITION EQUAL -1
+        OR ENCODE_NTT_POSITION EQUAL -1
+        OR ENCODE_BOUNDARY_POSITION GREATER_EQUAL ENCODE_NTT_POSITION)
+    message(FATAL_ERROR "Encode stream does not transform host-embedded RNS plaintext")
+endif()
+file(READ "${ROOT}/outputs/encode/test_data/params.json" ENCODE_PARAMS)
+if(NOT ENCODE_PARAMS MATCHES
+        "\"input_domain\": \"host-signed-to-RNS/coefficient/Q\"")
+    message(FATAL_ERROR "Encode package does not freeze the host signed-to-RNS boundary")
+endif()
+file(READ "${ROOT}/outputs/encode/test_data/artifact_manifest.csv" ENCODE_MANIFEST)
+if(NOT ENCODE_MANIFEST MATCHES "expected_ntt_q.bin[^\n]*4x4096")
+    message(FATAL_ERROR "Encode expected output does not contain four Q limbs")
+endif()
+
+file(READ "${ROOT}/output/rescale.asm" RESCALE_ASM)
+foreach(MARKER
+        "RESCALE: rounded drop-last q_3 for 2 component(s)"
+        "add floor(q_last/2) in every Q context"
+        "reuse ModDown with Q'=q_0..q_2 and P={q_3}"
+        "MODDOWN stage-1: BConv P -> Q")
+    string(FIND "${RESCALE_ASM}" "${MARKER}" POSITION)
+    if(POSITION EQUAL -1)
+        message(FATAL_ERROR "Rescale stream is missing marker: ${MARKER}")
+    endif()
+endforeach()
+file(READ "${ROOT}/src/operator/rescale.cpp" RESCALE_SOURCE)
+string(FIND "${RESCALE_SOURCE}"
+    "generate_hpu_moddown_body_asm" RESCALE_MODDOWN_POSITION)
+if(RESCALE_MODDOWN_POSITION EQUAL -1)
+    message(FATAL_ERROR "Rescale does not reuse the shared ModDown generator")
+endif()
+file(READ "${ROOT}/outputs/rescale/test_data/params.json" RESCALE_PARAMS)
+if(NOT RESCALE_PARAMS MATCHES
+        "\"output_domain\": \"ciphertext/coefficient/Q_without_last\"")
+    message(FATAL_ERROR "Rescale package does not describe the dropped output basis")
+endif()
+file(READ "${ROOT}/outputs/rescale/test_data/artifact_manifest.csv" RESCALE_MANIFEST)
+if(NOT RESCALE_MANIFEST MATCHES "expected_qprime.bin[^\n]*2x3x4096")
+    message(FATAL_ERROR "Rescale expected output is not two components over three retained Q limbs")
+endif()
+
 string(FIND "${CIPHERTEXT_ASM}" "pfree p" PFREE_POSITION)
 if(PFREE_POSITION EQUAL -1)
     message(FATAL_ERROR "Ciphertext multiply does not release temporary object slots with pfree")
@@ -377,7 +430,7 @@ function(CHECK_OBJECT_LIFECYCLE RELATIVE_PATH)
     endforeach()
 endfunction()
 
-foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
+foreach(CASE_NAME ntt intt encode rescale mm bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
     CHECK_OBJECT_LIFECYCLE("output/${CASE_NAME}.asm")
 endforeach()
 
@@ -393,7 +446,7 @@ function(CHECK_MOD_CONTEXT_LOAD RELATIVE_PATH)
     endforeach()
 endfunction()
 
-foreach(CASE_NAME ntt intt bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
+foreach(CASE_NAME ntt intt encode rescale bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
     CHECK_MOD_CONTEXT_LOAD("output/${CASE_NAME}.asm")
 endforeach()
 
@@ -419,12 +472,12 @@ function(CHECK_TERMINAL_PSYNC RELATIVE_PATH)
     endif()
 endfunction()
 
-foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
+foreach(CASE_NAME ntt intt encode rescale mm bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
     CHECK_TERMINAL_PSYNC("output/${CASE_NAME}.asm")
 endforeach()
 CHECK_TERMINAL_PSYNC("outputs/rv_interface_smoke/rv_interface_smoke.asm")
 
-foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
+foreach(CASE_NAME ntt intt encode rescale mm bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
     foreach(EXECUTABLE_FILE
             "output/${CASE_NAME}.cpp"
             "outputs/${CASE_NAME}/${CASE_NAME}.cpp")
@@ -476,6 +529,22 @@ if(NOT RELIN_CMD26_COUNT EQUAL RELIN_INST32_COUNT)
     message(FATAL_ERROR "Relinearization 32-bit instruction and 26-bit precode counts differ")
 endif()
 
+file(STRINGS "${ROOT}/outputs/encode/encode.inst32" ENCODE_INST32_LINES)
+list(LENGTH ENCODE_INST32_LINES ENCODE_INST32_COUNT)
+file(STRINGS "${ROOT}/outputs/encode/encode.cmd26" ENCODE_CMD26_LINES)
+list(LENGTH ENCODE_CMD26_LINES ENCODE_CMD26_COUNT)
+if(ENCODE_INST32_COUNT LESS 100 OR NOT ENCODE_CMD26_COUNT EQUAL ENCODE_INST32_COUNT)
+    message(FATAL_ERROR "Encode instruction/precode stream is missing or inconsistent")
+endif()
+
+file(STRINGS "${ROOT}/outputs/rescale/rescale.inst32" RESCALE_INST32_LINES)
+list(LENGTH RESCALE_INST32_LINES RESCALE_INST32_COUNT)
+file(STRINGS "${ROOT}/outputs/rescale/rescale.cmd26" RESCALE_CMD26_LINES)
+list(LENGTH RESCALE_CMD26_LINES RESCALE_CMD26_COUNT)
+if(RESCALE_INST32_COUNT LESS 100 OR NOT RESCALE_CMD26_COUNT EQUAL RESCALE_INST32_COUNT)
+    message(FATAL_ERROR "Rescale instruction/precode stream is missing or inconsistent")
+endif()
+
 file(SHA256 "${ROOT}/outputs/relinearization/test_data/expected_q.bin" RELIN_EXPECTED_HASH)
 file(SHA256 "${ROOT}/outputs/ciphertext_multiply/test_data/expected/ciphertext_out_q.bin"
     CIPHERTEXT_EXPECTED_HASH)
@@ -504,6 +573,10 @@ file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "STAGE_TWIDDLE_LAYOUT=PASS\n"
     "NEGACYCLIC_FACTORS_EXPLICIT=PASS\n"
     "NTT_PHYSICAL_OUT_OF_PLACE=PASS\n"
+    "ENCODE_HOST_RNS_BOUNDARY=PASS\n"
+    "RESCALE_ROUNDED_DROP_LAST=PASS\n"
+    "ENCODE_INST32_COUNT=${ENCODE_INST32_COUNT}\n"
+    "RESCALE_INST32_COUNT=${RESCALE_INST32_COUNT}\n"
     "RELINEARIZATION_REUSES_KEYSWITCH=PASS\n"
     "RELINEARIZATION_INST32_COUNT=${RELIN_INST32_COUNT}\n"
     "CIPHERTEXT_MULTIPLY_INST32_COUNT=${INST32_COUNT}\n"
