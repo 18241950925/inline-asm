@@ -41,7 +41,7 @@ std::string generate_hpu_cmult_body_asm(
     const int POBJ_B = 1;
     const int POBJ_OUT = 2;
 
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+    asm_code << hpu::dload(POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
     for (int i = 0; i < num_q; ++i) {
         asm_code << "        /* q_" << i << " */\n";
@@ -49,35 +49,35 @@ std::string generate_hpu_cmult_body_asm(
         asm_code << hpu::pmodld(i);
 
         asm_code << "        /* --- CMULT out0 = a0 * b0 --- */\n";
-        asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a0
-        asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b0
+        asm_code << hpu::dload(POBJ_A, hpu::DataType::poly); // a0
+        asm_code << hpu::dload(POBJ_B, hpu::DataType::poly); // b0
         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A, POBJ_B);
         asm_code << hpu::pfree(POBJ_A);
         asm_code << hpu::pfree(POBJ_B);
-        asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1); // store out0
+        asm_code << hpu::dstore(POBJ_OUT, 1); // store out0
 
         asm_code << "        /* --- CMULT out1 = a0 * b1 + a1 * b0 --- */\n";
-        asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a0
-        asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b1
+        asm_code << hpu::dload(POBJ_A, hpu::DataType::poly); // a0
+        asm_code << hpu::dload(POBJ_B, hpu::DataType::poly); // b1
         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A, POBJ_B);
         asm_code << hpu::pfree(POBJ_A);
         asm_code << hpu::pfree(POBJ_B);
         // temp result is in POBJ_OUT
         // Now compute a1 * b0 and ADD
-        asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a1
-        asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b0
+        asm_code << hpu::dload(POBJ_A, hpu::DataType::poly); // a1
+        asm_code << hpu::dload(POBJ_B, hpu::DataType::poly); // b0
         asm_code << hpu::pmac(POBJ_OUT, POBJ_A, POBJ_B);
         asm_code << hpu::pfree(POBJ_A);
         asm_code << hpu::pfree(POBJ_B);
-        asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1); // store out1
+        asm_code << hpu::dstore(POBJ_OUT, 1); // store out1
 
         asm_code << "        /* --- CMULT out2 = a1 * b1 --- */\n";
-        asm_code << hpu::dload("x0", "x0", POBJ_A, hpu::DataType::poly); // a1
-        asm_code << hpu::dload("x0", "x0", POBJ_B, hpu::DataType::poly); // b1
+        asm_code << hpu::dload(POBJ_A, hpu::DataType::poly); // a1
+        asm_code << hpu::dload(POBJ_B, hpu::DataType::poly); // b1
         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A, POBJ_B);
         asm_code << hpu::pfree(POBJ_A);
         asm_code << hpu::pfree(POBJ_B);
-        asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1); // store out2
+        asm_code << hpu::dstore(POBJ_OUT, 1); // store out2
     }
 
     asm_code << hpu::pfree(POBJ_MOD_CTX);
@@ -146,45 +146,45 @@ std::string generate_hpu_cmult_asm(
 //         asm_code << "        /* q_" << i << " */\n";
 
 //         // Convert a0
-//         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_TMP_A, hpu::DataType::poly);
 //         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
-//         asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
+//         asm_code << hpu::dstore(POBJ_TMP_A, 0);
 
 //         // Convert a1
-//         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_TMP_A, hpu::DataType::poly);
 //         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
-//         asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
+//         asm_code << hpu::dstore(POBJ_TMP_A, 0);
 
 //         // Convert b0
-//         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_TMP_A, hpu::DataType::poly);
 //         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
-//         asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
+//         asm_code << hpu::dstore(POBJ_TMP_A, 0);
 
 //         // Convert b1
-//         asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_TMP_A, hpu::DataType::poly);
 //         asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
-//         asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 0);
+//         asm_code << hpu::dstore(POBJ_TMP_A, 0);
 
 //         // Now compute out0 = a0*b0
-//         asm_code << hpu::dload("x0", "x0", POBJ_A0, hpu::DataType::poly);
-//         asm_code << hpu::dload("x0", "x0", POBJ_B0, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_A0, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_B0, hpu::DataType::poly);
 //         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A0, POBJ_B0);
-//         asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 0);
+//         asm_code << hpu::dstore(POBJ_OUT, 0);
 
 //         // out2 = a1*b1
-//         asm_code << hpu::dload("x0", "x0", POBJ_A0, hpu::DataType::poly);
-//         asm_code << hpu::dload("x0", "x0", POBJ_B0, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_A0, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_B0, hpu::DataType::poly);
 //         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A0, POBJ_B0);
-//         asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 0);
+//         asm_code << hpu::dstore(POBJ_OUT, 0);
 
 //         // out1 = a0*b1 + a1*b0
-//         asm_code << hpu::dload("x0", "x0", POBJ_A0, hpu::DataType::poly);
-//         asm_code << hpu::dload("x0", "x0", POBJ_B0, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_A0, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_B0, hpu::DataType::poly);
 //         asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_A0, POBJ_B0);
-//         asm_code << hpu::dload("x0", "x0", POBJ_A0, hpu::DataType::poly);
-//         asm_code << hpu::dload("x0", "x0", POBJ_B0, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_A0, hpu::DataType::poly);
+//         asm_code << hpu::dload(POBJ_B0, hpu::DataType::poly);
 //         asm_code << hpu::pmac(POBJ_OUT, POBJ_A0, POBJ_B0);
-//         asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 0);
+//         asm_code << hpu::dstore(POBJ_OUT, 0);
 //     }
 
 //     if (append_psync) {

@@ -44,8 +44,8 @@ std::string generate_hpu_bconv_contexts_body_asm(
     // 对每个输入基 b_j 计算: x_j = [a_j * b_hat_inv] mod b_j
     // ==========================================
     // 一次性加载模表对象；DMA 与后续 pmodld 的一致性由硬件维护。
-    asm_code << "        // dload all mod contexts (placeholder)\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+    asm_code << "        // dload the runtime-relocated complete modulus table\n";
+    asm_code << hpu::dload(POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
 
     asm_code << "        /* --- STAGE 1: Precompute in source basis --- */\n";
@@ -54,15 +54,15 @@ std::string generate_hpu_bconv_contexts_body_asm(
                  << ", source limb " << j << " */\n";
         asm_code << hpu::pmodld(source_contexts[j]);
 
-        asm_code << "        // dload a_j and qhat_inv_j (placeholder)\n";
-        asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
-        asm_code << hpu::dload("x0", "x0", POBJ_TMP_B, hpu::DataType::poly);
+        asm_code << "        // dload source limb and runtime-relocated qhat inverse\n";
+        asm_code << hpu::dload(POBJ_TMP_A, hpu::DataType::poly);
+        asm_code << hpu::dload(POBJ_TMP_B, hpu::DataType::poly);
 
         asm_code << hpu::pmul(POBJ_TMP_A, POBJ_TMP_A, POBJ_TMP_B);
         asm_code << hpu::pfree(POBJ_TMP_B);
 
-        asm_code << "        // dstore x_j to tmp memory (placeholder)\n";
-        asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 1);
+        asm_code << "        // dstore x_j to runtime-bound scratch span\n";
+        asm_code << hpu::dstore(POBJ_TMP_A, 1);
     }
 
     // ==========================================
@@ -76,9 +76,9 @@ std::string generate_hpu_bconv_contexts_body_asm(
         asm_code << hpu::pmodld(target_contexts[i]);
 
         for (std::size_t j = 0; j < source_contexts.size(); ++j) {
-            asm_code << "        // dload x_j and qhat_modp_j_i (placeholder)\n";
-            asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
-            asm_code << hpu::dload("x0", "x0", POBJ_TMP_B, hpu::DataType::poly);
+            asm_code << "        // dload x_j and qhat_modp_j_i from runtime-bound spans\n";
+            asm_code << hpu::dload(POBJ_TMP_A, hpu::DataType::poly);
+            asm_code << hpu::dload(POBJ_TMP_B, hpu::DataType::poly);
 
             if (j == 0) {
                 asm_code << hpu::pmul(POBJ_ACC, POBJ_TMP_A, POBJ_TMP_B);
@@ -89,8 +89,8 @@ std::string generate_hpu_bconv_contexts_body_asm(
             asm_code << hpu::pfree(POBJ_TMP_B);
         }
         
-        asm_code << "        // dstore Acc_i to target memory (placeholder)\n";
-        asm_code << hpu::dstore("x0", "x0", POBJ_ACC, 1);
+        asm_code << "        // dstore accumulator to the resolved target span\n";
+        asm_code << hpu::dstore(POBJ_ACC, 1);
     }
 
     asm_code << hpu::pfree(POBJ_MOD_CTX);

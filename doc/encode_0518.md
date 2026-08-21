@@ -1,4 +1,8 @@
-# 2026-05-18 编码模块接入与当前交付流程
+# 2026-05-18 编码模块接入与历史交付流程
+
+> 2026-08-21 注：本文保留旧问题的发现过程；其中关于 `x0/x0`、Auto
+> 符号寄存器和“不可执行”的结论不再描述当前实现。当前状态以 README、
+> `doc/HPU_PROGRAMMING_MANUAL.md` 和 Nexus-AM resolved relocation manifest 为准。
 
 本文件记录编码链路接入工作，并按 2026 年 7 月 23 日的当前工程结构说明 HPU 指令生成、32-bit RV 指令、26-bit HPU 命令、FHE 软件 reference 和测试数据交付流程。
 

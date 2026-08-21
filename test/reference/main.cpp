@@ -457,6 +457,43 @@ BasisPoly moddown(const BasisPoly& input_qp,
     return out;
 }
 
+Poly apply_negacyclic_automorphism(const Poly& input,
+                                   U64 galois_element,
+                                   U64 modulus)
+{
+    if ((galois_element & 1U) == 0U || input.empty()) {
+        throw std::runtime_error("automorphism requires a non-empty polynomial and odd Galois element");
+    }
+    const U64 two_n = static_cast<U64>(input.size()) * 2U;
+    Poly output(input.size(), 0U);
+    for (std::size_t coefficient = 0; coefficient < input.size(); ++coefficient) {
+        const U64 exponent =
+            (static_cast<U64>(coefficient) * galois_element) % two_n;
+        const std::size_t target =
+            static_cast<std::size_t>(exponent % input.size());
+        output[target] = exponent < input.size()
+            ? input[coefficient]
+            : (input[coefficient] == 0U ? 0U : modulus - input[coefficient]);
+    }
+    return output;
+}
+
+BasisPoly apply_negacyclic_automorphism(
+    const BasisPoly& input,
+    U64 galois_element,
+    const std::vector<U64>& moduli)
+{
+    if (input.size() != moduli.size()) {
+        throw std::runtime_error("automorphism basis/modulus size mismatch");
+    }
+    BasisPoly output(input.size());
+    for (std::size_t basis = 0; basis < input.size(); ++basis) {
+        output[basis] = apply_negacyclic_automorphism(
+            input[basis], galois_element, moduli[basis]);
+    }
+    return output;
+}
+
 BasisPoly decrypt_ciphertext(const Ciphertext& ciphertext,
                              const BasisPoly& secret,
                              const std::vector<U64>& moduli,
@@ -1147,9 +1184,8 @@ void write_hardware_package(const std::filesystem::path& test_data_root,
                << "  \"line_map\": \"hardware/line_map.csv\",\n"
                << "  \"hpu_mem_config\": \"hardware/hpu_mem_config.json\",\n"
                << "  \"custom1_sideband\": \"GPR[rs1]=line_offset, GPR[rs2]=line_count, both in 256-byte line units\",\n"
-               << "  \"hardware_fields_pending\": [\"DMA instruction relocation and GPR value loading\", "
-                  "\"scratch allocation\", "
-                  "\"host handling of the terminal psync notification\"]\n}\n";
+               << "  \"runtime_binding\": \"pass the resolved DMA span array to the generated hpu_program_* entry; Nexus-AM materializes auditable resolved manifests\",\n"
+               << "  \"qualification_pending\": [\"target RTL execution evidence\"]\n}\n";
     write_text(test_data_root / "memory_map.json", memory_map.str());
 
     write_text(hardware_root / "README.md",
@@ -1331,6 +1367,50 @@ void generate(const std::filesystem::path& output_root,
         }
     }
 
+    // AUTO index 1 is frozen to the standard odd Galois element 3.  The CPU
+    // applies x -> x^3 in the negacyclic coefficient layout; the HPU then
+    // performs a normal key switch from sigma_3(s) back to s.
+    constexpr std::size_t kAutoIndex = 1;
+    constexpr U64 kAutoGaloisElement = 3;
+    Ciphertext auto_rotated;
+    for (std::size_t component = 0; component < 2; ++component) {
+        auto_rotated[component] = apply_negacyclic_automorphism(
+            ct_a[component], kAutoGaloisElement, q_moduli);
+    }
+    const BasisPoly auto_secret_qp = apply_negacyclic_automorphism(
+        secret_qp, kAutoGaloisElement, all_moduli);
+    std::vector<std::array<BasisPoly, 2>> galois_key(kDnum);
+    std::vector<std::array<BasisPoly, 2>> galois_key_ntt(kDnum);
+    for (std::size_t digit = 0; digit < kDnum; ++digit) {
+        const std::vector<U64> gadget = crt_digit_factors(
+            q_moduli, digit * digit_size, digit_size, all_moduli);
+        std::vector<std::int64_t> r_small(kN);
+        for (std::int64_t& value : r_small) {
+            value = static_cast<std::int64_t>(rng() % 7) - 3;
+        }
+        for (BasisPoly& component : galois_key[digit]) {
+            component.resize(all_moduli.size());
+        }
+        for (std::size_t basis = 0; basis < all_moduli.size(); ++basis) {
+            const U64 modulus = all_moduli[basis];
+            const U64 p_modulus = product_mod(p_moduli, modulus);
+            Poly a = scalar_poly(
+                encode_signed(r_small, modulus), p_modulus, modulus);
+            const Poly a_times_s = negacyclic_mul(
+                a, secret_qp[basis], modulus, all_roots[basis]);
+            const Poly target = scalar_poly(
+                auto_secret_qp[basis],
+                mul_mod(p_modulus, gadget[basis], modulus), modulus);
+            galois_key[digit][0][basis] =
+                sub_poly(target, a_times_s, modulus);
+            galois_key[digit][1][basis] = std::move(a);
+        }
+        for (std::size_t component = 0; component < 2; ++component) {
+            galois_key_ntt[digit][component] = transform_basis(
+                galois_key[digit][component], all_moduli, all_roots, false);
+        }
+    }
+
     std::vector<BasisPoly> modup_coeff(kDnum);
     std::vector<BasisPoly> modup_ntt(kDnum);
     std::array<BasisPoly, 2> keyswitch_ntt;
@@ -1360,6 +1440,49 @@ void generate(const std::filesystem::path& output_root,
             keyswitch_ntt[component], all_moduli, all_roots, true);
         keyswitch_q[component] = moddown(keyswitch_qp[component], q_moduli, p_moduli);
     }
+
+    std::array<BasisPoly, 2> auto_keyswitch_ntt;
+    for (BasisPoly& component : auto_keyswitch_ntt) {
+        component.assign(all_moduli.size(), Poly(kN, 0));
+    }
+    for (std::size_t digit = 0; digit < kDnum; ++digit) {
+        const BasisPoly raised = modup(
+            auto_rotated[1], q_moduli, all_moduli,
+            digit * digit_size, digit_size);
+        const BasisPoly raised_ntt = transform_basis(
+            raised, all_moduli, all_roots, false);
+        for (std::size_t component = 0; component < 2; ++component) {
+            for (std::size_t basis = 0; basis < all_moduli.size(); ++basis) {
+                auto_keyswitch_ntt[component][basis] = add_poly(
+                    auto_keyswitch_ntt[component][basis],
+                    pointwise_mul(raised_ntt[basis],
+                                  galois_key_ntt[digit][component][basis],
+                                  all_moduli[basis]),
+                    all_moduli[basis]);
+            }
+        }
+    }
+    std::array<BasisPoly, 2> auto_keyswitch_q;
+    for (std::size_t component = 0; component < 2; ++component) {
+        const BasisPoly coeff_qp = transform_basis(
+            auto_keyswitch_ntt[component], all_moduli, all_roots, true);
+        auto_keyswitch_q[component] = moddown(
+            coeff_qp, q_moduli, p_moduli);
+    }
+    Ciphertext auto_output;
+    for (std::size_t basis = 0; basis < kNumQ; ++basis) {
+        auto_output[0].push_back(add_poly(
+            auto_rotated[0][basis], auto_keyswitch_q[0][basis],
+            q_moduli[basis]));
+        auto_output[1].push_back(auto_keyswitch_q[1][basis]);
+    }
+    const BasisPoly auto_decrypted = decrypt_ciphertext(
+        auto_output, secret_q, q_moduli, q_roots);
+    const BasisPoly auto_expected = apply_negacyclic_automorphism(
+        decrypt_ciphertext(ct_a, secret_q, q_moduli, q_roots),
+        kAutoGaloisElement, q_moduli);
+    verify_equal(auto_expected, auto_decrypted,
+                 "automorphism plus Galois key switch decryption");
 
     Ciphertext keyswitch_output;
     Ciphertext output;
@@ -1569,9 +1692,10 @@ void generate(const std::filesystem::path& output_root,
         "key so failures are bit-exact and easy to localize. They are not security test vectors. "
         "`memory_map.json` points to the generated uint32/256-byte host-memory layout. "
         "Custom1 line sideband semantics, CSR offsets, Bank 5/mod-table mapping, and physical "
-        "NTT/INTT out-of-place behavior are frozen; runtime/RTL owners still must implement "
-        "DMA relocation/GPR loading, scratch addresses, and cache/fault/interrupt handling "
-        "before direct hardware execution.\n";
+        "NTT/INTT out-of-place behavior are frozen. The generated hpu_program_* C entry "
+        "accepts one concrete line offset/count span per DMA; the Nexus-AM hpu-it runtime "
+        "resolves the full layout, configures cache/CSR/fault/interrupt handling, and emits "
+        "a row-by-row relocation manifest. Target RTL evidence remains a qualification step.\n";
     write_text(output_root / "README.md", readme);
     write_text(output_root / "VALIDATION.txt",
                "PASS\nrelinearized_decryption == tensor_decryption\n"
@@ -1743,10 +1867,49 @@ void generate(const std::filesystem::path& output_root,
                            std::move(case_artifacts),
                            all_moduli, all_roots);
 
+        case_artifacts.clear();
+        words.clear();
+        append_words(words, auto_rotated[0]);
+        append_words(words, auto_rotated[1]);
+        add_artifact(case_artifacts, "input_rotated_q.bin",
+                     "CPU-applied negacyclic x->x^3 ciphertext",
+                     {2, kNumQ, kN}, std::move(words),
+                     {"component[c0,c1]", "basis_q", "coefficient"});
+        words.clear();
+        for (const auto& digit : galois_key_ntt) {
+            append_words(words, digit[0]);
+            append_words(words, digit[1]);
+        }
+        add_artifact(case_artifacts, "galois_key_ntt_qp.bin",
+                     "Galois key switching sigma_3(s) back to s",
+                     {kDnum, 2, kNumQ + kNumP, kN}, std::move(words),
+                     {"digit", "component[ks0,ks1]", "basis_q_then_p",
+                      "coefficient"});
+        words.clear();
+        append_words(words, auto_output[0]);
+        append_words(words, auto_output[1]);
+        add_artifact(case_artifacts, "expected_q.bin",
+                     "automorphed and Galois-key-switched ciphertext",
+                     {2, kNumQ, kN}, std::move(words),
+                     {"component[c0,c1]", "basis_q", "coefficient"});
+        write_case_package(*suite_root, "auto",
+                           common_params("auto",
+                                         "CPU coefficient automorphism/Q + Galois key/NTT/QP",
+                                         "ciphertext/coefficient/Q", all_moduli),
+                           std::move(case_artifacts), all_moduli, all_roots);
+        write_text(*suite_root / "auto" / "test_data" / "AUTO_LAYOUT.json",
+                   "{\n"
+                   "  \"auto_index\": " + std::to_string(kAutoIndex) + ",\n"
+                   "  \"galois_element\": " + std::to_string(kAutoGaloisElement) + ",\n"
+                   "  \"coefficient_map\": \"dst=(src*galois_element) mod 2N; negate when dst>=N\",\n"
+                   "  \"cpu_preprocess\": true,\n"
+                   "  \"hpu_stage\": \"Galois KeySwitch only\"\n"
+                   "}\n");
         write_text(*suite_root / "auto" / "test_data" / "STATUS.md",
-                   "BLOCKED: auto.asm still uses symbolic DMA registers. Physical register "
-                   "allocation, automorphism index layout, and DMA ABI must be fixed before "
-                   "a bit-exact executable UT package can be issued.\n");
+                   "PASS: auto index 1 is frozen to negacyclic x->x^3. The CPU performs the "
+                   "coefficient permutation because the frozen 11-instruction HPU ISA has no "
+                   "shuffle opcode; the generated HPU program performs the complete Galois "
+                   "KeySwitch with bit-exact input/key/output artifacts.\n");
     }
 
     std::cout << "Generated " << artifacts.size() << " binary artifacts in " << output_root << '\n';

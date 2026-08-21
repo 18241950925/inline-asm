@@ -40,8 +40,8 @@ std::string generate_hpu_moddown_body_asm(
         target_contexts,
         false);
 
-    asm_code << "        // dload all mod contexts (placeholder)\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+    asm_code << "        // dload the runtime-relocated complete modulus table\n";
+    asm_code << hpu::dload(POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
 
     asm_code << "        /* MODDOWN stage-2: q <- q - correction (mod q_i) */\n";
@@ -49,15 +49,15 @@ std::string generate_hpu_moddown_body_asm(
         asm_code << "        /* q_" << i << " */\n";
         asm_code << hpu::pmodld(i);
 
-        asm_code << hpu::dload("x0", "x0", POBJ_Q, hpu::DataType::poly);
-        asm_code << hpu::dload("x0", "x0", POBJ_CORR, hpu::DataType::poly);
-        asm_code << hpu::dload("x0", "x0", POBJ_P_INV, hpu::DataType::poly);
+        asm_code << hpu::dload(POBJ_Q, hpu::DataType::poly);
+        asm_code << hpu::dload(POBJ_CORR, hpu::DataType::poly);
+        asm_code << hpu::dload(POBJ_P_INV, hpu::DataType::poly);
         
         asm_code << hpu::psub(POBJ_Q, POBJ_Q, POBJ_CORR);
         asm_code << hpu::pmul(POBJ_Q, POBJ_Q, POBJ_P_INV);
         asm_code << hpu::pfree(POBJ_CORR);
         asm_code << hpu::pfree(POBJ_P_INV);
-        asm_code << hpu::dstore("x0", "x0", POBJ_Q, 1);
+        asm_code << hpu::dstore(POBJ_Q, 1);
     }
 
     asm_code << hpu::pfree(POBJ_MOD_CTX);

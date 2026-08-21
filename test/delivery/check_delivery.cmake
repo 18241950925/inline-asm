@@ -68,6 +68,24 @@ foreach(RELATIVE_PATH IN LISTS REQUIRED_FILES)
     endif()
 endforeach()
 
+# Executable custom1 streams use the frozen CPU/HPU ABI.  x0/x0 and the old
+# symbolic x_* names encode unusable DMA sidebands and must never reappear in
+# a delivered assembly program.
+file(GLOB GENERATED_ASM "${ROOT}/output/*.asm")
+foreach(ASM_PATH IN LISTS GENERATED_ASM)
+    file(READ "${ASM_PATH}" ASM_SOURCE)
+    if(ASM_SOURCE MATCHES "\"d(load|store)[ \t]+x0,[ \t]*x0")
+        message(FATAL_ERROR "DMA x0/x0 placeholder remains in ${ASM_PATH}")
+    endif()
+    if(ASM_SOURCE MATCHES "\"d(load|store)[ \t]+x_[A-Za-z0-9_]+")
+        message(FATAL_ERROR "Symbolic DMA register remains in ${ASM_PATH}")
+    endif()
+    if(ASM_SOURCE MATCHES "\"d(load|store)" AND
+            NOT ASM_SOURCE MATCHES "\"d(load|store)[ \t]+x10,[ \t]*x11")
+        message(FATAL_ERROR "DMA instruction does not use x10/x11 in ${ASM_PATH}")
+    endif()
+endforeach()
+
 file(READ "${ROOT}/outputs/ciphertext_multiply/test_data/VALIDATION.txt" VALIDATION)
 if(NOT VALIDATION MATCHES "^PASS")
     message(FATAL_ERROR "FHE reference validation did not pass")
@@ -237,13 +255,18 @@ foreach(SOURCE_TEXT MODUP_SOURCE KEYSWITCH_SOURCE AUTO_SOURCE)
         message(FATAL_ERROR "${SOURCE_TEXT} still references the removed hybrid ModUp API")
     endif()
 endforeach()
-foreach(SOURCE_TEXT KEYSWITCH_SOURCE AUTO_SOURCE)
+foreach(SOURCE_TEXT KEYSWITCH_SOURCE)
     string(FIND "${${SOURCE_TEXT}}"
         "generate_hpu_modup_body_asm" UNIFIED_MODUP_POSITION)
     if(UNIFIED_MODUP_POSITION EQUAL -1)
         message(FATAL_ERROR "${SOURCE_TEXT} does not call the unified full-basis ModUp generator")
     endif()
 endforeach()
+string(FIND "${AUTO_SOURCE}"
+    "generate_hpu_keyswitch_body_asm" AUTO_KEYSWITCH_POSITION)
+if(AUTO_KEYSWITCH_POSITION EQUAL -1)
+    message(FATAL_ERROR "AUTO does not reuse the complete Galois KeySwitch stream")
+endif()
 
 file(READ "${ROOT}/output/modup.asm" MODUP_ASM)
 foreach(MARKER
@@ -398,9 +421,38 @@ endfunction()
 
 foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
     CHECK_TERMINAL_PSYNC("output/${CASE_NAME}.asm")
-    CHECK_TERMINAL_PSYNC("output/${CASE_NAME}.cpp")
 endforeach()
 CHECK_TERMINAL_PSYNC("outputs/rv_interface_smoke/rv_interface_smoke.asm")
+
+foreach(CASE_NAME ntt intt mm bconv pmult cmult modup moddown auto keyswitch relinearization ciphertext_multiply)
+    foreach(EXECUTABLE_FILE
+            "output/${CASE_NAME}.cpp"
+            "outputs/${CASE_NAME}/${CASE_NAME}.cpp")
+        file(READ "${ROOT}/${EXECUTABLE_FILE}" EXECUTABLE_SOURCE)
+        if(NOT EXECUTABLE_SOURCE MATCHES "register uintptr_t hpu_rs1 __asm__\\(\"x10\"\\)"
+                AND NOT CASE_NAME STREQUAL "mm")
+            message(FATAL_ERROR "${EXECUTABLE_FILE}: executable backend does not bind x10")
+        endif()
+        if(NOT EXECUTABLE_SOURCE MATCHES "register uintptr_t hpu_rs2 __asm__\\(\"x11\"\\)"
+                AND NOT CASE_NAME STREQUAL "mm")
+            message(FATAL_ERROR "${EXECUTABLE_FILE}: executable backend does not bind x11")
+        endif()
+        if(NOT EXECUTABLE_SOURCE MATCHES "__asm__ volatile\\(\".word 0x[0-9A-F]+")
+            message(FATAL_ERROR "${EXECUTABLE_FILE}: executable backend has no fixed .word")
+        endif()
+        if(EXECUTABLE_SOURCE MATCHES "__asm__ volatile\\([^\n]*d(load|store)")
+            message(FATAL_ERROR "${EXECUTABLE_FILE}: GNU-unknown HPU mnemonic remains")
+        endif()
+    endforeach()
+    foreach(REQUIRED_EXECUTABLE_ARTIFACT
+            "outputs/${CASE_NAME}/${CASE_NAME}.c"
+            "outputs/${CASE_NAME}/${CASE_NAME}.h"
+            "outputs/${CASE_NAME}/dma_relocation_manifest.csv")
+        if(NOT EXISTS "${ROOT}/${REQUIRED_EXECUTABLE_ARTIFACT}")
+            message(FATAL_ERROR "Missing executable artifact: ${REQUIRED_EXECUTABLE_ARTIFACT}")
+        endif()
+    endforeach()
+endforeach()
 
 file(STRINGS "${ROOT}/outputs/ciphertext_multiply/ciphertext_multiply.inst32" INST32_LINES)
 list(LENGTH INST32_LINES INST32_COUNT)
@@ -437,7 +489,7 @@ file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "ASM_ENCODING=PASS\n"
     "PRECODE_CMD26=PASS\n"
     "MOD_CTX_SMALL_BANK_FLAG=PASS\n"
-    "DMA_CONSISTENCY_HARDWARE_MANAGED=PASS\n"
+    "DMA_RELOCATABLE_EXECUTABLE_BACKEND=PASS\n"
     "TERMINAL_PSYNC=PASS\n"
     "INSTRUCTION_SET_11=PASS\n"
     "PFREE_LIFECYCLE=PASS\n"
@@ -456,6 +508,6 @@ file(WRITE "${ROOT}/outputs/DELIVERY_REPORT.txt"
     "RELINEARIZATION_INST32_COUNT=${RELIN_INST32_COUNT}\n"
     "CIPHERTEXT_MULTIPLY_INST32_COUNT=${INST32_COUNT}\n"
     "HARDWARE_EXECUTION=CONDITIONAL\n"
-    "PENDING=DMA instruction relocation/GPR loading, scratch map, runtime cache/fault/terminal-psync handling\n")
+    "PENDING=semantic DMA span binding, scratch map, target hardware evidence\n")
 
 message(STATUS "HPU software delivery check PASS (${INST32_COUNT} ciphertext-multiply instructions)")

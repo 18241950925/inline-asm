@@ -1,5 +1,9 @@
 # HPU 最新文档符合性审计
 
+> 2026-08-21 注：本文是修复前审计，其中 `x0/x0` DMA 结论已失效。
+> 当前生成入口固定使用 `x10/x11`，并由类型化 span 与 Nexus-AM resolved
+> manifest 绑定具体 line offset/count。
+
 审计日期：2026-08-18
 
 ## 1. 审计基线

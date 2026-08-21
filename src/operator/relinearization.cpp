@@ -30,17 +30,17 @@ std::string generate_add_second_component_body_asm(int num_q)
     const int POBJ_MOD_CTX = 4;
 
     asm_code << "        /* --- Relinearization final merge: out1 = t1 + ks1 --- */\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+    asm_code << hpu::dload(POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
     for (int i = 0; i < num_q; ++i) {
         asm_code << "        /* q_" << i << " */\n";
         asm_code << hpu::pmodld(i);
-        asm_code << hpu::dload("x0", "x0", POBJ_T1, hpu::DataType::poly);
-        asm_code << hpu::dload("x0", "x0", POBJ_KS1, hpu::DataType::poly);
+        asm_code << hpu::dload(POBJ_T1, hpu::DataType::poly);
+        asm_code << hpu::dload(POBJ_KS1, hpu::DataType::poly);
         asm_code << hpu::padd(POBJ_OUT1, POBJ_T1, POBJ_KS1);
         asm_code << hpu::pfree(POBJ_T1);
         asm_code << hpu::pfree(POBJ_KS1);
-        asm_code << hpu::dstore("x0", "x0", POBJ_OUT1, 1);
+        asm_code << hpu::dstore(POBJ_OUT1, 1);
     }
     asm_code << hpu::pfree(POBJ_MOD_CTX);
 

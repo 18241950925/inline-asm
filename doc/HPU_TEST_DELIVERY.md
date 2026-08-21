@@ -36,7 +36,7 @@ NTT_PHYSICAL_OUT_OF_PLACE=PASS
 HARDWARE_EXECUTION=CONDITIONAL
 ```
 
-`HARDWARE_EXECUTION=CONDITIONAL` 不是算法或数据失败。`uint32` 镜像、256B line、`mod_ctx`、twiddle、`.cmd26`、custom1 sideband 语义和 CSR 偏移均已生成或冻结；剩余条件是 runtime 为每条 DMA 装载实际 line offset/count、分配 scratch，并绑定外存地址。完成这些绑定前，当前 `.inst32`/`.cmd26` 中的 `dload/dstore x0,x0` 只能作为计算顺序流。
+`HARDWARE_EXECUTION=CONDITIONAL` 不是算法或数据失败。`uint32` 镜像、256B line、`mod_ctx`、twiddle、`.cmd26`、custom1 sideband、类型化 DMA span 和 CSR 偏移均已生成或冻结；生成的 C 后端在每条 DMA 前绑定 `x10/x11`。Nexus-AM IT runtime 已解析实际 line offset/count、scratch、cache、FAULT/IRQ 和 HPU_MEM window。这里剩余的条件是目标 RTL/板级执行及 monitor 证据，而不是软件 DMA 占位。
 
 ## 2. 程序入口与执行顺序
 

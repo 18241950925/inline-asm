@@ -36,16 +36,16 @@ std::string generate_basis_ntt_body_asm(
     const int POBJ_MOD_CTX = 4;
 
     asm_code << "        /* --- " << label << ": coefficient -> NTT domain --- */\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+    asm_code << hpu::dload(POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
     for (int component = 0; component < num_components; ++component) {
         asm_code << "        /* " << label << " component_" << component << " */\n";
         for (int i = 0; i < num_q; ++i) {
             asm_code << "        /* q_" << i << " */\n";
             asm_code << hpu::pmodld(i);
-            asm_code << hpu::dload("x0", "x0", POBJ_POLY, hpu::DataType::poly);
+            asm_code << hpu::dload(POBJ_POLY, hpu::DataType::poly);
             asm_code << generate_hpu_ntt_body_asm(N, POBJ_POLY, POBJ_TWIDDLE, false);
-            asm_code << hpu::dstore("x0", "x0", POBJ_POLY, 1);
+            asm_code << hpu::dstore(POBJ_POLY, 1);
         }
     }
     asm_code << hpu::pfree(POBJ_MOD_CTX);
@@ -66,16 +66,16 @@ std::string generate_basis_intt_body_asm(
     const int POBJ_MOD_CTX = 4;
 
     asm_code << "        /* --- " << label << ": NTT -> coefficient domain --- */\n";
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+    asm_code << hpu::dload(POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
     for (int component = 0; component < num_components; ++component) {
         asm_code << "        /* " << label << " component_" << component << " */\n";
         for (int i = 0; i < num_q; ++i) {
             asm_code << "        /* q_" << i << " */\n";
             asm_code << hpu::pmodld(i);
-            asm_code << hpu::dload("x0", "x0", POBJ_POLY, hpu::DataType::poly);
+            asm_code << hpu::dload(POBJ_POLY, hpu::DataType::poly);
             asm_code << generate_hpu_intt_body_asm(N, POBJ_POLY, POBJ_TWIDDLE, false);
-            asm_code << hpu::dstore("x0", "x0", POBJ_POLY, 1);
+            asm_code << hpu::dstore(POBJ_POLY, 1);
         }
     }
     asm_code << hpu::pfree(POBJ_MOD_CTX);

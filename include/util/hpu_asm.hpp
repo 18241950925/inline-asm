@@ -5,6 +5,12 @@
 
 namespace hpu {
 
+// Frozen CPU/HPU custom1 ABI.  The executable runtime binds a different
+// line_offset/line_count pair before each DMA word, but every encoded DMA
+// instruction names the same two architectural registers.
+inline constexpr const char* kDmaOffsetRegister = "x10";
+inline constexpr const char* kDmaCountRegister = "x11";
+
 inline constexpr int kRegularBankCount = 5;
 inline constexpr int kRegularBankLines = 1024;
 inline constexpr int kHpuWordsPerLine = 64;
@@ -67,6 +73,17 @@ inline std::string dstore(const std::string& rs1, const std::string& rs2, int ps
     std::ostringstream ss;
     ss << "        \"dstore " << rs1 << ", " << rs2 << ", " << pobj(psrc) << ", " << rel << " \\n\\t\"\n";
     return ss.str();
+}
+
+inline std::string dload(
+    int pdst,
+    DataType load_type,
+    DloadFlag flag = DloadFlag::regular_bank) {
+    return dload(kDmaOffsetRegister, kDmaCountRegister, pdst, load_type, flag);
+}
+
+inline std::string dstore(int psrc, int rel) {
+    return dstore(kDmaOffsetRegister, kDmaCountRegister, psrc, rel);
 }
 
 // ==========================================

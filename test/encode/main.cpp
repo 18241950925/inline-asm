@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "assembler.hpp"
+#include "executable.hpp"
 
 namespace {
 
@@ -22,6 +23,7 @@ const std::vector<std::string> kEncodableOutputs{
     "keyswitch",
     "relinearization",
     "ciphertext_multiply",
+    "auto",
 };
 
 const std::vector<std::string> kAllOutputs{
@@ -39,11 +41,7 @@ const std::vector<std::string> kAllOutputs{
     "ciphertext_multiply",
 };
 
-const std::vector<std::string> kSkippedOutputs{
-    // auto.asm still contains symbolic DMA register placeholders such as
-    // x_c0/x_offset/x_out, so it cannot be encoded before register allocation.
-    "auto",
-};
+const std::vector<std::string> kSkippedOutputs{};
 
 std::string read_all(const std::filesystem::path& path) {
     std::ifstream input(path);
@@ -109,6 +107,14 @@ void write_cmd26(const std::filesystem::path& path,
     }
 }
 
+void write_text(const std::filesystem::path& path, const std::string& contents) {
+    std::ofstream output(path);
+    if (!output) {
+        throw std::runtime_error("failed to open output file: " + path.string());
+    }
+    output << contents;
+}
+
 void package_case(const std::filesystem::path& source_root,
                   const std::filesystem::path& outputs_root,
                   const std::string& stem) {
@@ -141,9 +147,19 @@ void encode_output(const std::filesystem::path& outputs_root,
     const auto encoded = hpu::assemble_source(read_all(input_path));
     write_inst32(output_path, encoded);
     write_cmd26(command_path, encoded);
+    const auto executable = hpu::render_executable_source(stem, encoded);
+    const auto header = hpu::render_executable_header(
+        stem, hpu::collect_dma_relocations(encoded).size());
+    const auto manifest = hpu::render_dma_manifest(encoded);
+    write_text(case_dir / (stem + ".cpp"), executable);
+    write_text(case_dir / (stem + ".c"), executable);
+    write_text(case_dir / (stem + ".h"), header);
+    write_text(case_dir / "dma_relocation_manifest.csv", manifest);
+    write_text(std::filesystem::path{"output"} / (stem + ".cpp"), executable);
     std::cout << "Encoded " << input_path << " -> " << output_path
-              << " and " << command_path << " (" << encoded.size()
-              << " instructions)\n";
+              << ", " << command_path << " and executable .cpp ("
+              << encoded.size() << " instructions, "
+              << hpu::collect_dma_relocations(encoded).size() << " DMA relocations)\n";
 }
 
 void write_rv_interface_smoke(const std::filesystem::path& outputs_root) {

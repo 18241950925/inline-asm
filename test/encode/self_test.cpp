@@ -4,6 +4,8 @@
 #include <vector>
 
 #include "assembler.hpp"
+#include "executable.hpp"
+#include "util/hpu_asm.hpp"
 
 namespace {
 
@@ -35,11 +37,27 @@ void expect_precoded(const std::string& source,
     }
 }
 
+void expect_program_rejected(const std::string& source)
+{
+    try {
+        hpu::validate_executable_program(hpu::assemble_source(source));
+    } catch (const std::exception&) {
+        return;
+    }
+    throw std::runtime_error("invalid executable lifetime was accepted");
+}
+
 } // namespace
 
 int main()
 {
     try {
+        if (hpu::dload(0, hpu::DataType::poly).find(
+                "dload x10, x11, p0, 1, 0") == std::string::npos
+            || hpu::dstore(2, 1).find(
+                "dstore x10, x11, p2, 1") == std::string::npos) {
+            throw std::runtime_error("runtime DMA register ABI mismatch");
+        }
         const std::string smoke =
             "dload x10, x11, p0, 0, 0\n"
             "dload x10, x11, p4, 2, 1\n"
@@ -93,6 +111,52 @@ int main()
         expect_encoded("dstore x10, x11, p2, 1", 0x00B5542BU);
         expect_encoded("pmul p2, p0, 255", 0x243FC10BU);
         expect_encoded("pmac p2, p0, 255", 0x343FC10BU);
+
+        const auto executable_encoded = hpu::assemble_source(
+            "dload x10, x11, p4, 2, 1\n"
+            "pmodld 0\n"
+            "dload x10, x11, p0, 1, 0\n"
+            "dload x10, x11, p1, 1, 0\n"
+            "pmul p2, p0, p1\n"
+            "pfree p0\n"
+            "pfree p1\n"
+            "dstore x10, x11, p2, 1\n"
+            "pfree p4\n"
+            "psync\n");
+        hpu::validate_executable_program(executable_encoded);
+        expect_program_rejected(
+            "dload x10, x11, p0, 1, 0\n"
+            "dload x10, x11, p0, 1, 0\n"
+            "psync\n");
+        expect_program_rejected(
+            "dload x10, x11, p0, 1, 0\n"
+            "psync\n"
+            "pfree p0\n");
+        const std::string executable =
+            hpu::render_executable_source("smoke", executable_encoded);
+        const std::string header = hpu::render_executable_header(
+            "smoke", hpu::collect_dma_relocations(executable_encoded).size());
+        const std::string manifest = hpu::render_dma_manifest(executable_encoded);
+        if (hpu::collect_dma_relocations(executable_encoded).size() != 4)
+            throw std::runtime_error("executable DMA count mismatch");
+        if (executable.find("register uintptr_t hpu_rs1 __asm__(\"x10\")")
+            == std::string::npos)
+            throw std::runtime_error("executable x10 binding mismatch");
+        if (executable.find("register uintptr_t hpu_rs2 __asm__(\"x11\")")
+            == std::string::npos)
+            throw std::runtime_error("executable x11 binding mismatch");
+        if (executable.find(".word 0x00B5292B") == std::string::npos)
+            throw std::runtime_error("executable fixed word mismatch");
+        if (executable.find("spans[3].line_offset") == std::string::npos)
+            throw std::runtime_error("executable DSTORE relocation mismatch");
+        if (executable.find("hpu_rs2 __asm__(\"x11\") = 0;")
+            == std::string::npos)
+            throw std::runtime_error("executable DSTORE x11 ABI mismatch");
+        if (header.find("HPU_PROGRAM_SMOKE_DMA_COUNT = 4") == std::string::npos)
+            throw std::runtime_error("executable header mismatch");
+        if (manifest.find("7,3,dstore,2,1,0,x10,x11,0x00B5542B")
+            == std::string::npos)
+            throw std::runtime_error("DMA manifest mismatch");
 
         const std::vector<std::string> invalid{
             "padd p8, p0, p1",

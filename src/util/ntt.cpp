@@ -31,11 +31,11 @@ std::string generate_hpu_ntt_body_asm(
 
     int data_obj = obj_poly;
 
-    asm_code << "        // dload all mod contexts (placeholder)\n";
+    asm_code << "        // modulus table is loaded by the enclosing complete program\n";
     // 假设调用方已经加载过密文模数
     // Negacyclic NTT = pointwise pre-twist followed by a cyclic NTT.
     asm_code << "\n        // Negacyclic pre-twist: explicit PMUL by psi^i\n";
-    asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
+    asm_code << hpu::dload(twiddle_obj, hpu::DataType::poly);
     asm_code << hpu::pmul(data_obj, data_obj, twiddle_obj);
     asm_code << hpu::pfree(twiddle_obj);
 
@@ -45,7 +45,7 @@ std::string generate_hpu_ntt_body_asm(
         asm_code << "\n        // ==========================================\n";
         asm_code << "        // Stage " << stage << " (Stage-level pntt)\n";
         asm_code << "        // ==========================================\n";
-        asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
+        asm_code << hpu::dload(twiddle_obj, hpu::DataType::poly);
         asm_code << hpu::pntt(data_obj, twiddle_obj, stage, 0);
         asm_code << hpu::pfree(twiddle_obj);
     }
@@ -75,7 +75,7 @@ std::string generate_hpu_intt_body_asm(
 
     int data_obj = obj_poly;
 
-    asm_code << "        // dload all mod contexts (placeholder)\n";
+    asm_code << "        // modulus table is loaded by the enclosing complete program\n";
     // 假设调用方已经加载过密文模数
 
     // obj_poly 是稳定的逻辑对象；控制器为每个 stage 执行物理 out-of-place，
@@ -84,14 +84,14 @@ std::string generate_hpu_intt_body_asm(
         asm_code << "\n        // ==========================================\n";
         asm_code << "        // Stage " << stage << " (Stage-level pintt)\n";
         asm_code << "        // ==========================================\n";
-        asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
+        asm_code << hpu::dload(twiddle_obj, hpu::DataType::poly);
         asm_code << hpu::pintt(data_obj, twiddle_obj, stage, 0);
         asm_code << hpu::pfree(twiddle_obj);
     }
 
     // The PE butterfly does not implicitly normalize or apply the inverse twist.
     asm_code << "\n        // INTT normalize and inverse-twist: explicit PMUL by N^-1 * psi^-i\n";
-    asm_code << hpu::dload("x0", "x0", twiddle_obj, hpu::DataType::poly);
+    asm_code << hpu::dload(twiddle_obj, hpu::DataType::poly);
     asm_code << hpu::pmul(data_obj, data_obj, twiddle_obj);
     asm_code << hpu::pfree(twiddle_obj);
 
@@ -121,14 +121,16 @@ std::string generate_hpu_ntt_asm(
     }
 
     asm_code << "    __asm__ volatile(\n";
-    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx,
+    asm_code << hpu::dload(mod_ctx_obj, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
     asm_code << hpu::pmodld(0);
+    asm_code << hpu::dload(obj_poly, hpu::DataType::poly);
     asm_code << generate_hpu_ntt_body_asm(
         N,
         obj_poly,
         twiddle_obj,
         false);
+    asm_code << hpu::dstore(obj_poly, 1);
     asm_code << hpu::pfree(mod_ctx_obj);
     if (append_psync) {
         asm_code << hpu::psync();
@@ -161,14 +163,16 @@ std::string generate_hpu_intt_asm(
     }
 
     asm_code << "    __asm__ volatile(\n";
-    asm_code << hpu::dload("x0", "x0", mod_ctx_obj, hpu::DataType::mod_ctx,
+    asm_code << hpu::dload(mod_ctx_obj, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
     asm_code << hpu::pmodld(0);
+    asm_code << hpu::dload(obj_poly, hpu::DataType::poly);
     asm_code << generate_hpu_intt_body_asm(
         N,
         obj_poly,
         twiddle_obj,
         false);
+    asm_code << hpu::dstore(obj_poly, 1);
     asm_code << hpu::pfree(mod_ctx_obj);
     if (append_psync) {
         asm_code << hpu::psync();

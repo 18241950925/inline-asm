@@ -3,6 +3,7 @@ add_library(hpu_encode
         src/parser.cpp
         src/encoder.cpp
         src/assembler.cpp
+        src/executable.cpp
 )
 
 target_include_directories(hpu_encode

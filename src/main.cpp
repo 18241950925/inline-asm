@@ -124,10 +124,11 @@ void test_intt_codegen() {
 	}
 
 	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
-		std::string intt_body = generate_hpu_intt_body_asm(
+		std::string intt_body = generate_hpu_intt_asm(
 		kNttCfg.N,
 		kNttCfg.obj_poly,
 		kNttCfg.twiddle_obj,
+		kNttCfg.mod_ctx_obj,
 		true);
 	std::ofstream("output/intt.asm") << intt_body;
 	std::cout << "Saved intt body ASM to output/intt.asm\n";
@@ -148,10 +149,11 @@ void test_ntt_codegen()
 	}
 
 	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
-		std::string ntt_body = generate_hpu_ntt_body_asm(
+		std::string ntt_body = generate_hpu_ntt_asm(
 		kNttCfg.N,
 		kNttCfg.obj_poly,
 		kNttCfg.twiddle_obj,
+		kNttCfg.mod_ctx_obj,
 		true);
 	std::ofstream("output/ntt.asm") << ntt_body;
 	std::cout << "Saved ntt body ASM to output/ntt.asm\n";
@@ -172,10 +174,11 @@ void test_mm_codegen()
 	}
 
 	if (g_output_mode == OutputMode::ASM || g_output_mode == OutputMode::BOTH) {
-		std::string mm_body = generate_hpu_mm_body_asm(
+		std::string mm_body = generate_hpu_mm_asm(
 		kMmCfg.obj_a,
 		kMmCfg.obj_b,
 		kMmCfg.obj_c,
+		kMmCfg.mod_ctx_obj,
 		true);
 	std::ofstream("output/mm.asm") << mm_body;
 	std::cout << "Saved mm body ASM to output/mm.asm\n";

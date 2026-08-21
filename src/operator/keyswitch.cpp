@@ -58,15 +58,15 @@ std::string generate_hpu_keyswitch_body_asm(
 
         // 2. NTT
         asm_code << "        /* --- Step 2: NTT on Q and P bases --- */\n";
-        asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX, hpu::DataType::mod_ctx,
+        asm_code << hpu::dload(POBJ_MOD_CTX, hpu::DataType::mod_ctx,
                                hpu::DloadFlag::small_bank);
 
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* NTT ctx_" << i << " */\n";
             asm_code << hpu::pmodld(i);
-            asm_code << hpu::dload("x0", "x0", POBJ_TMP_A, hpu::DataType::poly);
+            asm_code << hpu::dload(POBJ_TMP_A, hpu::DataType::poly);
             asm_code << generate_hpu_ntt_body_asm(N, POBJ_TMP_A, TWIDDLE, false);
-            asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A, 1);
+            asm_code << hpu::dstore(POBJ_TMP_A, 1);
         }
 
         // 3. Multiplication with Evk
@@ -81,17 +81,17 @@ std::string generate_hpu_keyswitch_body_asm(
                 asm_code << "        /* base_" << i << " */\n";
                 asm_code << hpu::pmodld(i);
                 // IF first digit, just mul. If subsequent digits, multiply and accumulate (pmac)
-                asm_code << hpu::dload("x0", "x0", POBJ_CT, hpu::DataType::poly);
-                asm_code << hpu::dload("x0", "x0", POBJ_EVK, hpu::DataType::poly);
+                asm_code << hpu::dload(POBJ_CT, hpu::DataType::poly);
+                asm_code << hpu::dload(POBJ_EVK, hpu::DataType::poly);
                 if (d == 0) {
                     asm_code << generate_hpu_mm_body_asm(POBJ_OUT, POBJ_CT, POBJ_EVK);
                 } else {
-                    asm_code << hpu::dload("x0", "x0", POBJ_OUT, hpu::DataType::poly); // Load accumulated result
+                    asm_code << hpu::dload(POBJ_OUT, hpu::DataType::poly); // Load accumulated result
                     asm_code << hpu::pmac(POBJ_OUT, POBJ_CT, POBJ_EVK);
                 }
                 asm_code << hpu::pfree(POBJ_CT);
                 asm_code << hpu::pfree(POBJ_EVK);
-                asm_code << hpu::dstore("x0", "x0", POBJ_OUT, 1);
+                asm_code << hpu::dstore(POBJ_OUT, 1);
             }
         }
         asm_code << hpu::pfree(POBJ_MOD_CTX);
@@ -102,16 +102,16 @@ std::string generate_hpu_keyswitch_body_asm(
     const int POBJ_MOD_CTX2 = 4;
     const int TWIDDLE2 = 3;
     const int POBJ_TMP_A2 = 0;
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX2, hpu::DataType::mod_ctx,
+    asm_code << hpu::dload(POBJ_MOD_CTX2, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
     for (int v = 0; v < 2; ++v) {
         asm_code << "        /* INTT for out" << v << " */\n";
         for (int i = 0; i < total_bases; ++i) {
             asm_code << "        /* INTT ctx_" << i << " */\n";
             asm_code << hpu::pmodld(i);
-            asm_code << hpu::dload("x0", "x0", POBJ_TMP_A2, hpu::DataType::poly);
+            asm_code << hpu::dload(POBJ_TMP_A2, hpu::DataType::poly);
             asm_code << generate_hpu_intt_body_asm(N, POBJ_TMP_A2, TWIDDLE2, false);
-            asm_code << hpu::dstore("x0", "x0", POBJ_TMP_A2, 1);
+            asm_code << hpu::dstore(POBJ_TMP_A2, 1);
         }
     }
     asm_code << hpu::pfree(POBJ_MOD_CTX2);
@@ -128,21 +128,21 @@ std::string generate_hpu_keyswitch_body_asm(
     const int POBJ_BASE = 1;
     const int POBJ_FINAL_OUT0 = 2;
 
-    asm_code << hpu::dload("x0", "x0", POBJ_MOD_CTX_S6, hpu::DataType::mod_ctx,
+    asm_code << hpu::dload(POBJ_MOD_CTX_S6, hpu::DataType::mod_ctx,
                            hpu::DloadFlag::small_bank);
     
     for (int i = 0; i < num_q; ++i) { // 降模后只有 num_q 个基了
         asm_code << hpu::pmodld(i); // 切换固定模表中的 MOD_ID
         // 1. 加载刚才 ModDown 生成的 out0
-        asm_code << hpu::dload("x0", "x0", POBJ_OUT0, hpu::DataType::poly);
+        asm_code << hpu::dload(POBJ_OUT0, hpu::DataType::poly);
         // 2. 加载不参与分解、需要并入第一输出分量的 base（普通 KeySwitch 为 c0）
-        asm_code << hpu::dload("x0", "x0", POBJ_BASE, hpu::DataType::poly);
+        asm_code << hpu::dload(POBJ_BASE, hpu::DataType::poly);
         // 3. 在片上直接相加
         asm_code << hpu::padd(POBJ_FINAL_OUT0, POBJ_OUT0, POBJ_BASE);
         asm_code << hpu::pfree(POBJ_OUT0);
         asm_code << hpu::pfree(POBJ_BASE);
         // 4. 写回主存
-        asm_code << hpu::dstore("x0", "x0", POBJ_FINAL_OUT0, 1);
+        asm_code << hpu::dstore(POBJ_FINAL_OUT0, 1);
     }
     asm_code << hpu::pfree(POBJ_MOD_CTX_S6);
 

@@ -7,7 +7,7 @@
 - `dload(rs1, rs2, pobj, type, small_bank)` 表示“为逻辑对象分配片上 SRAM 并从外存搬入数据”：
   - `type = mod_ctx, small_bank = 1`：对象状态表仍以 `pobj` 维护 `ALLOC/V/busy/base/len`，allocator 使用 `flag[0]` 将其物理 base 分配到 small Bank 5。
   - `type = poly`：加载多项式/RNS 通道数据或预计算常量（如 twiddle、qhat_inv 等）。
-- 代码中 `x0` / `x_offset` / `x_c0` / `x_ct1_up` / `x_ct1_ntt` / `x_evk` / `x_out` / `x_tmp_c0` 等仅是占位地址寄存器名，测试时需用实际的 DMA/HBM 地址替代。
+- 所有 custom1 指令固定使用 `x10/x11`；可执行 runtime 在每次发射前分别装入当前对象的 HPU_MEM line offset 与 line count。对象语义及具体 span 由硬件 line map/IT fixture 绑定。
 - 模表 dload 后可直接执行 `pmodld MOD_ID`，DMA 一致性与对象可见性由硬件维护，不需要软件插入 `psync`。`pmodld` 不携带 `pobj`，而是按 MOD_ID 从 `mod_table_base_line` 选择上下文；模表物理顺序必须与 MOD_ID 一致。
 - `psync` 仅在完整程序末尾发出一次，用于向 CPU 报告整个 HPU 程序完成；各算子 body 被组合时不得追加 `psync`。
 - `dload` 使目标逻辑对象进入 live 状态。生成器在只读输入、常量、twiddle和模表对象最后一次使用后发出 `pfree`；输出使用 `dstore rel=1` 时由 DMA 完成后释放，不再重复发出 `pfree`。
@@ -240,7 +240,7 @@ BConv 生成 `Q\digit ∪ P`：
 | INTT/ModDown | `p0/p1`=累加分量/基转换常量，`p2`=临时输出，`p3`=twiddle，`p4`=模表 | Q 基 key-switch correction |
 | 最终合并 | 第一分量：`p0`=`ks0 correction`、`p1`=`t0`；第二分量：`p0`=`t1`、`p1`=`ks1`；`p4`=Q 模表 | `p2`=`ciphertext_out_q` 当前 limb |
 
-Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphertext_multiply/test_data/artifact_manifest.csv`；硬件 `uint32` 文件、checksum、line offset/count 分别见 `hardware/hardware_manifest.csv` 和 `hardware/line_map.csv`。当前生成器中的 `dload("x0", "x0", ...)` / `dstore("x0", "x0", ...)` 只表达数据依赖与计算顺序，尚未把这些 line 参数写入物理寄存器。
+Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphertext_multiply/test_data/artifact_manifest.csv`；硬件 `uint32` 文件、checksum、line offset/count 分别见 `hardware/hardware_manifest.csv` 和 `hardware/line_map.csv`。可执行后端固定编码 `x10/x11`，并在每条 DMA 前从调用方提供的 span 数组装载实际 line offset/count；Nexus-AM 集成还会生成逐条 resolved relocation manifest。
 
 ---
 
@@ -249,83 +249,20 @@ Reference 中上述逻辑对象的文件、shape 和 checksum 见 `outputs/ciphe
 
 ### dload 映射（核心步骤）
 
-Auto 不依赖硬件显式执行系数重排，而是将自同构融合到
-NTT/INTT 的 twiddle 中：对 `auto_idx = k` 使用指数按 `k`
-变换的 twiddle 表，使变换结果等价于对多项式执行
-`sigma_k: a(X) -> a(X^k)` 后再进入普通 NTT 域。
+当前冻结的唯一入口是 `auto_idx=1`，对应 Galois element 3。CPU runtime
+先按负循环环 `X^N+1` 对两个密文分量执行 `sigma_3: a(X)->a(X^3)`，并将
+旋转后的 Q4 分量写入 HPU_MEM。HPU 随后执行完整 Galois KeySwitch：
 
-> **DMA 绑定约定：** Auto 复用普通 `pntt`/`pintt` 指令和
-> `TWIDDLE (p3)` 逻辑槽位，所以 `auto_idx` 不需要出现在
-> `pntt`/`pintt` 的指令编码中。普通变换和 Auto 变换的
-> 区别由每条 twiddle `dload` 的外存地址/重定位表表达。
-> 后端必须根据下述调用位置绑定普通表或 `k` 专用表，
-> 不能将 Auto 内的所有 `dload ..., p3, 1, 0` 统一解释为
-> 普通 twiddle。
+1. 对旋转后的 `c1` 做 D2 ModUp；
+2. 对 Q4/P3 的所有 limb 做 NTT；
+3. 与冻结的 `galois_key[digit][component][basis]` 逐点乘加；
+4. 对两个累加分量做 INTT 和 ModDown；
+5. 把旋转后的 `c0` 并入第一输出分量，末尾仅发出一次 `psync`。
 
-**Step 0: c0 的普通 NTT -> Auto-INTT(k)**
-
-| 位置 | 目标槽位 | 加载内容 | 说明 |
-| --- | --- | --- | --- |
-| Step 0 开头 | `POBJ_MOD_CTX (p4)` | 完整 Q 模表镜像 | 循环外仅加载一次 |
-| 每个 `q_i` | `SLOT_A (p0)` | `c0` 当前基分片 | 来自 `x_c0/x_offset` |
-| 每个 `q_i` | `TWIDDLE (p3)` | 普通 NTT `pre_twist = psi^i` 和逐 stage twiddle | 先将 `c0` 转入普通 NTT 域，共 `1+logN` 次 twiddle `dload` |
-| 每个 `q_i` | `TWIDDLE (p3)` | `k` 对应的 Auto-INTT 逐 stage twiddle | 基础根/twiddle 按 `auto_idx=k` 变换，共 `logN` 次 `dload` |
-| 每个 `q_i` | `TWIDDLE (p3)` | `k` 对应的 Auto-INTT `post_untwist_scale` | 保留 `N^-1` 归一化，只对根的指数应用 `k` 变换；执行显式 `pmul` |
-
-Step 0 写回 `x_tmp_c0` 的语义是 `c0_auto = sigma_k(c0)`。
-
-**Step 1: ModUp**
-
-- 复用 `generate_hpu_modup_body_asm` 的 dload 语义（见上文）。
-- 槽位为 `p0`=输入/临时值，`p1`=预计算常量，`p2`=BConv 累加输出，
-  `p4`=模表。当前 ModUp 会保留 source digit 并通过 BConv 补齐完整
-  `Q∪P`，与后续全基遍历一致。
-
-**Step 2: Auto-NTT(k)**
-
-| 位置 | 目标槽位 | 加载内容 | 说明 |
-| --- | --- | --- | --- |
-| 当前 digit 的 Step 2 开头 | `POBJ_MOD_CTX (p4)` | 完整 `Q∪P` 模表镜像 | 循环外仅加载一次 |
-| 每个基 | `SLOT_A (p0)` | `ct1_up` 当前基分片 | ModUp 已产生完整 `Q∪P` 分片 |
-| 每个基 | `TWIDDLE (p3)` | Auto-NTT `pre_twist = psi^(k*i)` | 不能复用普通 `psi^i` pre-twist；加载后执行显式 `pmul` |
-| 每个基 | `TWIDDLE (p3)` | `k` 对应的 Auto-NTT 逐 stage twiddle | 每个基共 `logN` 次；与 pre-twist 一起产生 `NTT(sigma_k(ct1_up))` |
-
-**Step 3: Multiply & Accumulate with EVK**
-
-| 位置 | 目标槽位 | 加载内容 | 说明 |
-| --- | --- | --- | --- |
-| 每个基、每个 `v` | `SLOT_A (p0)` | `ct1_ntt` 当前基分片 | Step 2 产生的 `NTT(sigma_k(ct1_up))` |
-| 每个基、每个 `v` | `SLOT_B (p1)` | `galois_key[k][v]` 当前 digit/基分片 | 必须与 `auto_idx=k` 及 Auto twiddle 的方向约定一致 |
-| 非首 digit | `SLOT_C (p2)` | 先前累加值 | 来自 `x_out`；首 digit 直接以 `p2` 作为 `pmul` 目标 |
-
-**Step 4: INTT**
-
-| 位置 | 目标槽位 | 加载内容 | 说明 |
-| --- | --- | --- | --- |
-| Step 4 开头 | `POBJ_MOD_CTX (p4)` | 完整 `Q∪P` 模表镜像 | 两个 `v` 共用，仅加载一次 |
-| 每个基、每个 `v` | `SLOT_A (p0)` | `out[v]` 当前基分片 | 乘加后的结果 |
-| 每个基、每个 `v` | `TWIDDLE (p3)` | 普通 INTT 逐 stage twiddle 和 `post_untwist_scale = N^-1 * psi^-i` | Auto 已在 Step 2 融合，此处使用普通 INTT，每个基共 `logN+1` 次 twiddle `dload` |
-
-**Step 5: ModDown**
-
-- 复用 `generate_hpu_moddown_body_asm` 的 dload 语义（见上文）。
-
-**Step 6: Final Merge**
-
-| 位置 | 目标槽位 | 加载内容 | 说明 |
-| --- | --- | --- | --- |
-| Step 6 开头 | `POBJ_MOD_CTX (p4)` | 完整 Q 模表镜像 | 循环外仅加载一次 |
-| 每个 `q_i` | `SLOT_A (p0)` | `out0`（ModDown 后） | 当前基分片 |
-| 每个 `q_i` | `SLOT_B (p1)` | Step 0 暂存的 `c0_auto = sigma_k(c0)` | 来自 `x_tmp_c0` |
-
-`padd` 将 `c0_auto` 与 KeySwitch 的第一 correction 分量合并到
-`SLOT_C (p2)`，随后以 `dstore rel=1` 导出。
-
-Auto twiddle 的指数方向和 Galois Key 必须使用同一 ABI
-约定。如果上层将逻辑旋转步数映射为 Galois element，或将
-`sigma_k` 实现为指数乘 `k^-1` 的等价方向，该映射必须在
-twiddle 资产和 `galois_key[k]` 资产生成时一次性固定；不改变本节
-记录的 `dload`/`pntt`/`pintt` 指令顺序。
+DMA 槽位和顺序与 KeySwitch 一致，共 716 条 relocation。Nexus-AM 的
+`auto.csv` 为每条 DMA 给出 `logical_data_ref`、line offset/count 和边界；
+输入、Galois key、完整 HPU_MEM 镜像及逐字 golden 位于
+`outputs/auto/test_data/hardware/`。不再存在 `x_c0/x_offset/x_out` 等符号寄存器。
 
 ---
 

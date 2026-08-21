@@ -40,8 +40,8 @@ std::string generate_hpu_modup_body_asm(
     asm_code << "        /* Retain source digit limbs in full-basis workspace */\n";
     for (int i = 0; i < num_q_digit; ++i) {
         asm_code << "        /* Copy Q context " << (q_offset + i) << " */\n";
-        asm_code << hpu::dload("x0", "x0", 0, hpu::DataType::poly);
-        asm_code << hpu::dstore("x0", "x0", 0, 1);
+        asm_code << hpu::dload(0, hpu::DataType::poly);
+        asm_code << hpu::dstore(0, 1);
     }
     asm_code << generate_hpu_bconv_contexts_body_asm(
         source_contexts,
